@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.DS_Store
+.venv/
+env/
+.cursor/
+.gemini/
+
+# Exclude tex
+tex/
+
+# Data: Ignore all except the standardized pools
+Data/*
+!Data/testpool.txt
+!Data/trainpool.txt
+
+# Transient files
+randomseed

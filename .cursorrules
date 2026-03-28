@@ -1,0 +1,5 @@
+# Project rules for aod-tpw-from-radiation
+
+- Refer to `.agents/SKILL.md` for coding standards.
+- Maintain numbered scripts (1.arrange, 2.create_holdout, etc.).
+- Ensure `libRadtran.py` remains a pure library without side effects on import.
