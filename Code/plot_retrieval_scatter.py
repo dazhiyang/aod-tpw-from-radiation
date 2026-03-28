@@ -9,8 +9,8 @@ Pooled statistics (GHI + BNI/DNI + DHI, all rows): **MBE** = mean(model − meas
 [W m⁻²], **RMSE%** = RMSE / mean(measured) × 100, **R²** = 1 − Σ(y−x)² / Σ(x−x̄)² with
 x = measured, y = forward.
 
-Env: ``PLOT_INPUT`` (default ``Data/train_oe_beta_h2o.txt``), ``PLOT_OUTPUT`` (default
-``tex/figures/retrieval_scatter_merra_oe.png``).
+Env: ``PLOT_INPUT`` (default ``Data/train_ls_0.5k.txt``), ``PLOT_OUTPUT`` (default
+``tex/figures/retrieval_scatter_merra_ls.png``).
 
 Requires: pandas, numpy, matplotlib.
 """
@@ -25,11 +25,11 @@ import numpy as np
 import pandas as pd
 
 PROJECT = Path(__file__).resolve().parent.parent
-INPUT_TXT = Path(os.environ.get("PLOT_INPUT", str(PROJECT / "Data" / "train_oe_beta_h2o.txt")))
+INPUT_TXT = Path(os.environ.get("PLOT_INPUT", str(PROJECT / "Data" / "train_ls_0.5k.txt")))
 OUTPUT_PNG = Path(
     os.environ.get(
         "PLOT_OUTPUT",
-        str(PROJECT / "tex" / "figures" / "retrieval_scatter_merra_oe.png"),
+        str(PROJECT / "tex" / "figures" / "retrieval_scatter_merra_ls.png"),
     )
 )
 
@@ -43,11 +43,11 @@ need = [
     "bni",
     "dhi",
     "ghi_merra",
-    "dni_merra",
+    "bni_merra",
     "dhi_merra",
-    "ghi_oe",
-    "dni_oe",
-    "dhi_oe",
+    "ghi_ls",
+    "bni_ls",
+    "dhi_ls",
 ]
 for c in need:
     if c not in df.columns:
@@ -59,16 +59,16 @@ if len(sub) == 0:
 
 pairs_merra = (
     ("ghi", "ghi_merra", "GHI"),
-    ("bni", "dni_merra", "BNI vs DNI"),
+    ("bni", "bni_merra", "BNI"),
     ("dhi", "dhi_merra", "DHI"),
 )
-pairs_oe = (
-    ("ghi", "ghi_oe", "GHI"),
-    ("bni", "dni_oe", "BNI vs DNI"),
-    ("dhi", "dhi_oe", "DHI"),
+pairs_ls = (
+    ("ghi", "ghi_ls", "GHI"),
+    ("bni", "bni_ls", "BNI"),
+    ("dhi", "dhi_ls", "DHI"),
 )
 
-colors = {"GHI": "C0", "BNI vs DNI": "C1", "DHI": "C2"}
+colors = {"GHI": "C0", "BNI": "C1", "DHI": "C2"}
 
 
 def pooled_measured_forward(pairs: tuple[tuple[str, str, str], ...], frame: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
@@ -104,7 +104,7 @@ fig, axes = plt.subplots(1, 2, figsize=(11, 5.4), layout="constrained")
 
 for ax, pairs, title in (
     (axes[0], pairs_merra, "MERRA-2 forward vs measured"),
-    (axes[1], pairs_oe, "OE forward vs measured"),
+    (axes[1], pairs_ls, "LS forward vs measured"),
 ):
     for xcol, ycol, label in pairs:
         x = sub[xcol].to_numpy(dtype=float)

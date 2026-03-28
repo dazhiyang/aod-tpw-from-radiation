@@ -319,7 +319,7 @@ def run_clearsky(
     Returns:
     ------------
     sim : pd.Series
-        Series with 'ghi_sim', 'dni_sim', and 'dhi_sim' [W m-2].
+        Series with 'ghi_sim', 'bni_sim', and 'dhi_sim' [W m-2].
     """
     sza, _, _, _, _, a, b = _resolve_physics(
         row, config, o3_du=o3_du, h2o_mm=h2o_mm, albedo=albedo,
@@ -333,7 +333,7 @@ def run_clearsky(
     need.extend([albedo_r, p_r])
 
     if not np.isfinite(np.asarray(need, dtype=float)).all() or sza >= 90.0:
-        return pd.Series({"ghi_sim": np.nan, "dni_sim": np.nan, "dhi_sim": np.nan}, dtype=float)
+        return pd.Series({"ghi_sim": np.nan, "bni_sim": np.nan, "dhi_sim": np.nan}, dtype=float)
 
     uvspec_exe = os.path.join(libradtran_dir, "bin", "uvspec")
     inp_content = build_uvspec_input(
@@ -350,11 +350,11 @@ def run_clearsky(
     except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
         if not quiet:
             print(f"libRadtran/Execution error at {row.name}: {e}")
-        return pd.Series({"ghi_sim": np.nan, "dni_sim": np.nan, "dhi_sim": np.nan}, dtype=float)
+        return pd.Series({"ghi_sim": np.nan, "bni_sim": np.nan, "dhi_sim": np.nan}, dtype=float)
 
     raw = process.stdout.strip()
     if not raw:
-        return pd.Series({"ghi_sim": np.nan, "dni_sim": np.nan, "dhi_sim": np.nan}, dtype=float)
+        return pd.Series({"ghi_sim": np.nan, "bni_sim": np.nan, "dhi_sim": np.nan}, dtype=float)
 
     out = pd.read_csv(StringIO(raw), sep=r"\s+", header=None, names=["edir_horiz", "dhi_sim", "ghi_sim"], engine="python")
     edir_h = float(out["edir_horiz"].iloc[0])
@@ -363,9 +363,9 @@ def run_clearsky(
 
     sza_rad = np.radians(sza)
     cos_sza = max(float(np.cos(sza_rad)), 0.01)
-    dni_sim = edir_h / cos_sza
+    bni_sim = edir_h / cos_sza
 
-    return pd.Series({"ghi_sim": ghi_sim, "dni_sim": dni_sim, "dhi_sim": dhi_sim}, dtype=float)
+    return pd.Series({"ghi_sim": ghi_sim, "bni_sim": bni_sim, "dhi_sim": dhi_sim}, dtype=float)
 
 def calculate_residuals_oe(
     x: np.ndarray, row: pd.Series, libradtran_dir: str,
@@ -399,11 +399,11 @@ def calculate_residuals_oe(
         row, libradtran_dir, config, angstrom_alpha=alpha_m, o3_du=o3_du_m,
         angstrom_beta=beta, h2o_mm=h2o_mm, quiet=True,
     )
-    if pd.isna(sim["ghi_sim"]) or pd.isna(sim["dni_sim"]) or pd.isna(sim["dhi_sim"]):
+    if pd.isna(sim["ghi_sim"]) or pd.isna(sim["bni_sim"]) or pd.isna(sim["dhi_sim"]):
         return np.full(3, FAILURE_PENALTY, dtype=float)
 
     y_meas = np.array([float(row["ghi"]), float(row["bni"]), float(row["dhi"])], dtype=float)
-    y_sim = np.array([float(sim["ghi_sim"]), float(sim["dni_sim"]), float(sim["dhi_sim"])], dtype=float)
+    y_sim = np.array([float(sim["ghi_sim"]), float(sim["bni_sim"]), float(sim["dhi_sim"])], dtype=float)
     
     if not np.isfinite(y_meas).all():
         return np.full(3, FAILURE_PENALTY, dtype=float)
@@ -499,7 +499,7 @@ def process_row_ls(row: pd.Series, libradtran_dir: str, config: ClearskyConfig) 
 
     merra_sim = forward_merra_explicit(row, libradtran_dir, config, quiet=True)
     ghi_m = float(merra_sim["ghi_sim"]) if pd.notna(merra_sim["ghi_sim"]) else np.nan
-    dni_m = float(merra_sim["dni_sim"]) if pd.notna(merra_sim["dni_sim"]) else np.nan
+    bni_m = float(merra_sim["bni_sim"]) if pd.notna(merra_sim["bni_sim"]) else np.nan
     dhi_m = float(merra_sim["dhi_sim"]) if pd.notna(merra_sim["dhi_sim"]) else np.nan
 
     beta_hat, h2o_hat, ok, _cost = retrieve_beta_h2o_one_row(row, libradtran_dir, config)
@@ -510,14 +510,14 @@ def process_row_ls(row: pd.Series, libradtran_dir: str, config: ClearskyConfig) 
             angstrom_beta=beta_hat, h2o_mm=h2o_hat, quiet=True,
         )
         ghi_o = float(oe_sim["ghi_sim"]) if pd.notna(oe_sim["ghi_sim"]) else np.nan
-        dni_o = float(oe_sim["dni_sim"]) if pd.notna(oe_sim["dni_sim"]) else np.nan
+        bni_o = float(oe_sim["bni_sim"]) if pd.notna(oe_sim["bni_sim"]) else np.nan
         dhi_o = float(oe_sim["dhi_sim"]) if pd.notna(oe_sim["dhi_sim"]) else np.nan
     else:
         ghi_o = dni_o = dhi_o = np.nan
 
     return pd.Series({
-        "ghi_merra": ghi_m, "dni_merra": dni_m, "dhi_merra": dhi_m,
-        "ghi_ls": ghi_o, "dni_ls": dni_o, "dhi_ls": dhi_o,
+        "ghi_merra": ghi_m, "bni_merra": bni_m, "dhi_merra": dhi_m,
+        "ghi_ls": ghi_o, "bni_ls": bni_o, "dhi_ls": dhi_o,
         "beta_retrieved": beta_hat, "h2o_mm_retrieved": h2o_hat,
         "merra_ALPHA": alpha_m, "merra_BETA": beta_m,
         "merra_TO3": float(row["merra_TO3"]), "merra_TQV": float(row["merra_TQV"]),

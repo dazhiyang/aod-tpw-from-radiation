@@ -22,7 +22,7 @@ N_TEST = int(os.environ.get("N_TEST", "5000"))
 # Input: The output from 4.retrieval.py
 TRAIN_LS = PROJECT / "Data" / f"train_ls{K_SUFFIX}.txt"
 TEST_POOL = PROJECT / "Data" / "testpool.txt"
-PRED_OUT = PROJECT / "Data" / f"testpool_tabpfn{K_SUFFIX}.txt"
+PRED_OUT = PROJECT / "Data" / f"test{K_SUFFIX}.txt"
 
 FEATURES = [
     "ghi", "bni", "dhi", "zenith",

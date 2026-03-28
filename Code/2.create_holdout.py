@@ -17,7 +17,7 @@ INPUT_TXT = PROJECT / "Data" / "qiq_1min_merra_qc.txt"
 OUTPUT_TESTPOOL = PROJECT / "Data" / "testpool.txt"
 OUTPUT_TRAINPOOL = PROJECT / "Data" / "trainpool.txt"
 
-ZENITH_MAX = 85.0
+ZENITH_MAX = 87.0
 FRACTION = 0.30
 SEED = 42
 

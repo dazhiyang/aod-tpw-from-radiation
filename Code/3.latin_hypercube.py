@@ -54,9 +54,10 @@ clear = pd.Series(True, index=df.index) # Already pre-filtered by 2.create_holdo
 pool = df.loc[day & clear, FEATURES].dropna()
 print(f"Pool: {len(pool)} clear-sky daytime rows")
 
-# Latin Hypercube Sampling
+# Latin Hypercube Sampling (Over-sample to guarantee uniqueness)
+print(f"Generating {LHS_N*2} LHS candidates to ensure {LHS_N} unique physical rows...")
 sampler = qmc.LatinHypercube(d=len(FEATURES), seed=SEED)
-sample = sampler.random(n=LHS_N)
+sample = sampler.random(n=LHS_N * 2)
 
 # Scale LHS to pool data ranges (min/max)
 l_bounds = pool.min().values
@@ -65,12 +66,32 @@ lhs_scaled = qmc.scale(sample, l_bounds, u_bounds)
 
 # Nearest Neighbor mapping back to pool
 from sklearn.neighbors import NearestNeighbors
-nn = NearestNeighbors(n_neighbors=1).fit(pool.values)
-_, idx = nn.kneighbors(lhs_scaled)
-idx = idx.flatten()
+nn = NearestNeighbors(n_neighbors=100).fit(pool.values)  
+distances, indices = nn.kneighbors(lhs_scaled)
 
-train = pool.iloc[idx].copy()
+# Collect unique indices
+unique_idx = []
+used = set()
+for neighborhood in indices:
+    if len(unique_idx) >= LHS_N:
+        break
+    for idx in neighborhood:
+        if idx not in used:
+            unique_idx.append(idx)
+            used.add(idx)
+            break
+
+if len(unique_idx) < LHS_N:
+    print(f"WARNING: Only found {len(unique_idx)} unique rows. Target was {LHS_N}.")
+else:
+    print(f"Successfully found exactly {LHS_N} unique rows.")
+
+train = pool.iloc[unique_idx].copy()
 train.index.name = "time_utc"
+pd.options.mode.chained_assignment = None 
+train.loc[:, "ghi_merra"] = train["ghi"]
+train.loc[:, "bni_merra"] = train["bni"]
+train.loc[:, "dhi_merra"] = train["dhi"]
 
 # Save
 TRAIN_TXT.parent.mkdir(parents=True, exist_ok=True)

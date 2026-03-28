@@ -10,18 +10,18 @@ from pathlib import Path
 
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 from libRadtran import (
-    LIBRADTRANDIR, CLEARSKY_CONFIG, build_uvspec_input, run_clearsky
+    LIBRADTRANDIR, CLEARSKY_CONFIG, run_clearsky, forward_merra_explicit
 )
 
 PROJECT = Path(__file__).resolve().parent.parent
 
 # --- Suffix Handling ---
 K_SUFFIX = os.environ.get("K_SUFFIX", "_0.5k")
-PRED_IN = PROJECT / "Data" / f"testpool_tabpfn{K_SUFFIX}.txt"
-PLOT_OUT = PROJECT / "tex" / "figures" / f"evaluation_scatter_testpool{K_SUFFIX}.png"
+PRED_IN = PROJECT / "Data" / f"test{K_SUFFIX}.txt"
+VAL_OUT = PROJECT / "Data" / f"test_ls{K_SUFFIX}.txt"
 
 # --- Execution Logic ---
 if not PRED_IN.is_file():
@@ -31,49 +31,65 @@ if not PRED_IN.is_file():
 print(f"Loading predictions: {PRED_IN.name}")
 df = pd.read_csv(PRED_IN, sep="\t")
 
-# We evaluate everything provided in the prediction file
-sub = df.copy()
-print(f"Running validation forward models for {len(sub)} rows...")
-
-# Function to run forward model with predicted values
-# (We keep this inline for procedural simplicity)
 def run_val(row):
-    row_pred = row.copy()
-    row_pred["beta_retrieved"] = row["beta_pred"]
-    row_pred["h2o_mm_retrieved"] = row["h2o_mm_pred"]
-    fwd = run_clearsky(build_uvspec_input(row_pred, CLEARSKY_CONFIG), LIBRADTRANDIR)
+    """Run forward models for both MERRA-2 (prior) and TabPFN (predicted) parameters."""
+    # 1. MERRA-2 Forward
+    merra_sim = forward_merra_explicit(row, LIBRADTRANDIR, CLEARSKY_CONFIG)
+    
+    # 2. Predicted (LS) Forward
+    ls_sim = run_clearsky(
+        row, 
+        LIBRADTRANDIR, 
+        CLEARSKY_CONFIG, 
+        angstrom_beta=row["beta_pred"], 
+        h2o_mm=row["h2o_mm_pred"]
+    )
+    
     return pd.Series({
-        "ghi_pred": fwd.get("ghi", np.nan),
-        "dni_pred": fwd.get("bni", np.nan),
-        "dhi_pred": fwd.get("dhi", np.nan)
+        "ghi_merra": merra_sim.get("ghi_sim", np.nan),
+        "bni_merra": merra_sim.get("bni_sim", np.nan),
+        "dhi_merra": merra_sim.get("dhi_sim", np.nan),
+        "ghi_ls": ls_sim.get("ghi_sim", np.nan),
+        "bni_ls": ls_sim.get("bni_sim", np.nan),
+        "dhi_ls": ls_sim.get("dhi_sim", np.nan)
     })
 
-from tqdm import tqdm
+# Identify columns to add
+cols = ["ghi_merra", "bni_merra", "dhi_merra", "ghi_ls", "bni_ls", "dhi_ls"]
+
+# Define output path early to check for existence
+if VAL_OUT.is_file():
+    print(f"Loading existing validation results to resume: {VAL_OUT.name}")
+    existing = pd.read_csv(VAL_OUT, sep="\t")
+    # For simplicity, we just check if the columns exist and merge if possible
+    # But if we are running the whole thing, we just overwrite later
+    # The user said "do not overwrite" - likely meaning don't re-run points already in VAL_OUT
+    for c in cols:
+        if c not in df.columns and c in existing.columns:
+            df[c] = existing[c]
+
+for col in cols:
+    if col not in df.columns:
+        df[col] = np.nan
+
+# We only process rows where simulation is missing (checked by ghi_ls as proxy)
+mask = df["ghi_ls"].isna() | df["ghi_merra"].isna()
+sub = df[mask].copy()
+
+if len(sub) == 0:
+    print("All rows already processed. Nothing to do.")
+    sys.exit(0)
+
+print(f"Running validation forward models for {len(sub)} rows...")
+
 tqdm.pandas(desc="Validation Forward Models")
-val_fluxes = sub.progress_apply(run_val, axis=1)
+val_results = sub.progress_apply(run_val, axis=1)
 
-final = pd.concat([sub, val_fluxes], axis=1)
+# Update the main dataframe
+df.loc[mask, cols] = val_results
 
-# Plotting
-fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+print(f"Saving validation results to {VAL_OUT.name}...")
+df.to_csv(VAL_OUT, sep="\t", index=False, float_format="%.8f")
 
-# GHI Parity
-ax = axes[0]
-ax.scatter(final["ghi"], final["ghi_pred"], s=5, alpha=0.5, color="blue")
-ax.plot([0, 1100], [0, 1100], "r--")
-ax.set_title(f"GHI Parity (TabPFN {K_SUFFIX})")
-ax.set_xlabel("Measured GHI [W/m²]")
-ax.set_ylabel("Predicted GHI [W/m²]")
+print("Evaluation complete.")
 
-# DNI Parity
-ax = axes[1]
-ax.scatter(final["bni"], final["dni_pred"], s=5, alpha=0.5, color="green")
-ax.plot([0, 1100], [0, 1100], "r--")
-ax.set_title(f"DNI Parity (TabPFN {K_SUFFIX})")
-ax.set_xlabel("Measured BNI [W/m²]")
-ax.set_ylabel("Predicted DNI [W/m²]")
-
-plt.tight_layout()
-PLOT_OUT.parent.mkdir(parents=True, exist_ok=True)
-plt.savefig(PLOT_OUT, dpi=200)
-print(f"Saved parity plot: {PLOT_OUT}")
