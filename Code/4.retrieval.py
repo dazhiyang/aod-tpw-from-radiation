@@ -17,7 +17,7 @@ except ImportError:
     _tqdm = None
 
 from libRadtran import (
-    LIBRADTRANDIR, CLEARSKY_CONFIG, process_row_oe
+    LIBRADTRANDIR, CLEARSKY_CONFIG, process_row_ls
 )
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -37,13 +37,14 @@ def main():
 
     print(f"Starting retrieval for {len(df)} rows using libRadtran...")
     
-    _oe_fn = lambda r: process_row_oe(r, LIBRADTRANDIR, CLEARSKY_CONFIG)
+    _ls_fn = lambda r: process_row_ls(r, LIBRADTRANDIR, CLEARSKY_CONFIG)
     if _tqdm is not None:
-        _tqdm.pandas(desc="OE Beta + H2O", leave=True)
-        results = df.progress_apply(_oe_fn, axis=1)
+        _tqdm.pandas(desc="LS Beta + H2O", leave=True)
+        results = df.progress_apply(_ls_fn, axis=1)
     else:
-        results = df.apply(_oe_fn, axis=1)
+        results = df.apply(_ls_fn, axis=1)
 
+    # Collect results
     out = pd.concat([df, results], axis=1)
     
     cols = [

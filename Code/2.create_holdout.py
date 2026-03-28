@@ -27,54 +27,51 @@ FEATURES = [
     "merra_TO3", "merra_PS", "merra_BETA"
 ]
 
-def main():
-    if not INPUT_TXT.is_file():
-        print(f"ERROR: Missing input file: {INPUT_TXT}")
-        sys.exit(1)
+# --- Execution Logic ---
+if not INPUT_TXT.is_file():
+    print(f"ERROR: Missing input file: {INPUT_TXT}")
+    sys.exit(1)
 
-    print(f"Loading master pool: {INPUT_TXT.name}...")
-    df = pd.read_csv(INPUT_TXT, sep="\t", comment="#", parse_dates=["time_utc"], index_col="time_utc")
-    df = df.sort_index()
+print(f"Loading master pool: {INPUT_TXT.name}...")
+df = pd.read_csv(INPUT_TXT, sep="\t", comment="#", parse_dates=["time_utc"], index_col="time_utc")
+df = df.sort_index()
 
-    # Apply physical filters
-    day = df["zenith"].astype(float) <= ZENITH_MAX
-    clear = df["clearsky"].astype(int) == 1
-    
-    print("Filtering for clear-sky daytime conditions and dropping NaNs...")
-    pool = df.loc[day & clear, FEATURES].dropna()
-    
-    total_valid = len(pool)
-    print(f"Total valid clear-sky rows available: {total_valid}")
-    
-    # 30% random sample for the strict holdout test set
-    holdout = pool.sample(frac=FRACTION, random_state=SEED).copy()
-    holdout.index.name = "time_utc"
-    
-    # The remainder forms the new training pool (for Latin Hypercube sampling)
-    trainpool = pool.drop(holdout.index).copy()
-    trainpool.index.name = "time_utc"
-    
-    print(f"Split results ({FRACTION*100}% holdout):")
-    print(f" -> Holdout Test Set: {len(holdout)} rows")
-    print(f" -> LHS Train Pool:   {len(trainpool)} rows")
-    
-    # Write exact metadata
-    common_meta = (
-        f"# Source: {INPUT_TXT.name} | Filters: Zenith<={ZENITH_MAX}, Clearsky=1\n"
-        f"# Total={total_valid} | Split Fraction={FRACTION} | Seed={SEED}\n"
-    )
-    
-    print("Saving isolated datasets...")
-    with open(OUTPUT_TESTPOOL, "w", encoding="ascii") as f:
-        f.write(common_meta + f"# HOLDOUT TEST SET ({len(holdout)} rows)\n")
-    holdout.to_csv(OUTPUT_TESTPOOL, mode="a", sep="\t", float_format="%.12g")
-    
-    with open(OUTPUT_TRAINPOOL, "w", encoding="ascii") as f:
-        f.write(common_meta + f"# LHS TRAINING POOL ({len(trainpool)} rows)\n")
-    trainpool.to_csv(OUTPUT_TRAINPOOL, mode="a", sep="\t", float_format="%.12g")
+# Apply physical filters
+day = df["zenith"].astype(float) <= ZENITH_MAX
+clear = df["clearsky"].astype(int) == 1
 
-    print(f"Successfully wrote {OUTPUT_TESTPOOL.name}")
-    print(f"Successfully wrote {OUTPUT_TRAINPOOL.name}")
+print("Filtering for clear-sky daytime conditions and dropping NaNs...")
+pool = df.loc[day & clear, FEATURES].dropna()
 
-if __name__ == "__main__":
-    main()
+total_valid = len(pool)
+print(f"Total valid clear-sky rows available: {total_valid}")
+
+# 30% random sample for the strict holdout test set
+holdout = pool.sample(frac=FRACTION, random_state=SEED).copy()
+holdout.index.name = "time_utc"
+
+# The remainder forms the new training pool (for Latin Hypercube sampling)
+trainpool = pool.drop(holdout.index).copy()
+trainpool.index.name = "time_utc"
+
+print(f"Split results ({FRACTION*100}% holdout):")
+print(f" -> Holdout Test Set: {len(holdout)} rows")
+print(f" -> LHS Train Pool:   {len(trainpool)} rows")
+
+# Write exact metadata
+common_meta = (
+    f"# Source: {INPUT_TXT.name} | Filters: Zenith<={ZENITH_MAX}, Clearsky=1\n"
+    f"# Total={total_valid} | Split Fraction={FRACTION} | Seed={SEED}\n"
+)
+
+print("Saving isolated datasets...")
+with open(OUTPUT_TESTPOOL, "w", encoding="ascii") as f:
+    f.write(common_meta + f"# HOLDOUT TEST SET ({len(holdout)} rows)\n")
+holdout.to_csv(OUTPUT_TESTPOOL, mode="a", sep="\t", float_format="%.12g")
+
+with open(OUTPUT_TRAINPOOL, "w", encoding="ascii") as f:
+    f.write(common_meta + f"# LHS TRAINING POOL ({len(trainpool)} rows)\n")
+trainpool.to_csv(OUTPUT_TRAINPOOL, mode="a", sep="\t", float_format="%.12g")
+
+print(f"Successfully wrote {OUTPUT_TESTPOOL.name}")
+print(f"Successfully wrote {OUTPUT_TRAINPOOL.name}")

@@ -34,52 +34,49 @@ FEATURES = [
     "merra_TO3", "merra_PS", "merra_BETA"
 ]
 
-def main():
-    if not INPUT_TXT.is_file():
-        print(f"ERROR: Missing input table: {INPUT_TXT}")
-        sys.exit(1)
+# --- Execution Logic ---
+if not INPUT_TXT.is_file():
+    print(f"ERROR: Missing input table: {INPUT_TXT}")
+    sys.exit(1)
 
-    print(f"Loading master pool: {INPUT_TXT.name}...")
-    df = pd.read_csv(INPUT_TXT, sep="\t", comment="#", parse_dates=["time_utc"], index_col="time_utc")
-    df = df.sort_index()
+print(f"Loading master pool: {INPUT_TXT.name}...")
+df = pd.read_csv(INPUT_TXT, sep="\t", comment="#", parse_dates=["time_utc"], index_col="time_utc")
+df = df.sort_index()
 
-    # Column presence check
-    for c in FEATURES + ["zenith"]:
-        if c not in df.columns:
-            raise SystemExit(f"Missing column {c!r} in {INPUT_TXT}")
+# Column presence check
+for c in FEATURES + ["zenith"]:
+    if c not in df.columns:
+        raise SystemExit(f"Missing column {c!r} in {INPUT_TXT}")
 
-    day = df["zenith"].astype(float) <= ZENITH_MAX
-    clear = pd.Series(True, index=df.index) # Already pre-filtered by 2.create_holdout.py
-    
-    pool = df.loc[day & clear, FEATURES].dropna()
-    print(f"Pool: {len(pool)} clear-sky daytime rows")
+day = df["zenith"].astype(float) <= ZENITH_MAX
+clear = pd.Series(True, index=df.index) # Already pre-filtered by 2.create_holdout.py
 
-    # Latin Hypercube Sampling
-    sampler = qmc.LatinHypercube(d=len(FEATURES), seed=SEED)
-    sample = sampler.random(n=LHS_N)
-    
-    # Scale LHS to pool data ranges (min/max)
-    l_bounds = pool.min().values
-    u_bounds = pool.max().values
-    lhs_scaled = qmc.scale(sample, l_bounds, u_bounds)
+pool = df.loc[day & clear, FEATURES].dropna()
+print(f"Pool: {len(pool)} clear-sky daytime rows")
 
-    # Nearest Neighbor mapping back to pool
-    from sklearn.neighbors import NearestNeighbors
-    nn = NearestNeighbors(n_neighbors=1).fit(pool.values)
-    _, idx = nn.kneighbors(lhs_scaled)
-    idx = idx.flatten()
+# Latin Hypercube Sampling
+sampler = qmc.LatinHypercube(d=len(FEATURES), seed=SEED)
+sample = sampler.random(n=LHS_N)
 
-    train = pool.iloc[idx].copy()
-    train.index.name = "time_utc"
+# Scale LHS to pool data ranges (min/max)
+l_bounds = pool.min().values
+u_bounds = pool.max().values
+lhs_scaled = qmc.scale(sample, l_bounds, u_bounds)
 
-    # Save
-    TRAIN_TXT.parent.mkdir(parents=True, exist_ok=True)
-    common_meta = f"# Input: {INPUT_TXT.name} | LHS_N={LHS_N} | Seed={SEED}\n"
-    with open(TRAIN_TXT, "w", encoding="ascii") as f:
-        f.write(common_meta + f"# train: all {len(train)} LHS samples\n")
-    train.to_csv(TRAIN_TXT, mode="a", sep="\t", float_format="%.12g")
+# Nearest Neighbor mapping back to pool
+from sklearn.neighbors import NearestNeighbors
+nn = NearestNeighbors(n_neighbors=1).fit(pool.values)
+_, idx = nn.kneighbors(lhs_scaled)
+idx = idx.flatten()
 
-    print(f"Generated {len(train)} samples -> {TRAIN_TXT.name}")
+train = pool.iloc[idx].copy()
+train.index.name = "time_utc"
 
-if __name__ == "__main__":
-    main()
+# Save
+TRAIN_TXT.parent.mkdir(parents=True, exist_ok=True)
+common_meta = f"# Input: {INPUT_TXT.name} | LHS_N={LHS_N} | Seed={SEED}\n"
+with open(TRAIN_TXT, "w", encoding="ascii") as f:
+    f.write(common_meta + f"# train: all {len(train)} LHS samples\n")
+train.to_csv(TRAIN_TXT, mode="a", sep="\t", float_format="%.12g")
+
+print(f"Generated {len(train)} samples -> {TRAIN_TXT.name}")
