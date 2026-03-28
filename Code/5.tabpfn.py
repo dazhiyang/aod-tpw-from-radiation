@@ -13,7 +13,7 @@ import numpy as np
 import torch
 from tabpfn import TabPFNRegressor
 
-from libRadtran import BETA_MAX, BETA_MIN, H2O_MM_MAX, H2O_MM_MIN
+from libRadtran import BETA_MAX, BETA_MIN, W_MAX, W_MIN
 
 PROJECT = Path(__file__).resolve().parent.parent
 
@@ -21,25 +21,27 @@ PROJECT = Path(__file__).resolve().parent.parent
 K_SUFFIX = os.environ.get("K_SUFFIX", "_0.5k")
 N_TEST = int(os.environ.get("N_TEST", "5000"))
 
-# Input: The output from 4.retrieval.py
-TRAIN_LS = PROJECT / "Data" / f"train_ls{K_SUFFIX}.txt"
+MODE = os.environ.get("MODE", "ls").lower()
+
+# Input: The output from retrieval step
+TRAIN_IN = PROJECT / "Data" / f"train_{MODE}{K_SUFFIX}.txt"
 TEST_POOL = PROJECT / "Data" / "testpool.txt"
-PRED_OUT = PROJECT / "Data" / f"test{K_SUFFIX}.txt"
+PRED_OUT = PROJECT / "Data" / f"pred_{MODE}{K_SUFFIX}.txt"
 
 FEATURES = [
     "ghi", "bni", "dhi", "zenith",
     "merra_ALPHA", "merra_ALBEDO", "merra_TQV", 
     "merra_TO3", "merra_PS"
 ]
-TARGETS = ["beta_retrieved", "h2o_mm_retrieved"]
+TARGETS = [f"beta_{MODE}", f"w_{MODE}"]
 
 # --- Execution Logic ---
-if not TRAIN_LS.is_file():
-    print(f"ERROR: Missing training data: {TRAIN_LS}")
+if not TRAIN_IN.is_file():
+    print(f"ERROR: Missing training data: {TRAIN_IN}")
     sys.exit(1)
 
-print(f"Loading training data: {TRAIN_LS.name}")
-train_df = pd.read_csv(TRAIN_LS, sep="\t")
+print(f"Loading training data: {TRAIN_IN.name}")
+train_df = pd.read_csv(TRAIN_IN, sep="\t")
 
 print(f"Loading test pool: {TEST_POOL.name}")
 test_df = pd.read_csv(TEST_POOL, sep="\t", comment="#")
@@ -81,12 +83,12 @@ for target in TARGETS:
         preds_list.append(model.predict(batch_X))
     all_preds[target] = np.concatenate(preds_list)
 
-# Save predictions (clip to forward-model bounds; matches libRadtran.retrieve_beta_h2o_one_row)
-test_df["beta_pred"] = np.clip(
-    all_preds["beta_retrieved"], BETA_MIN, BETA_MAX,
+# Save predictions (clip to forward-model bounds; matches libRadtran.retrieve_one_row_ls)
+test_df[f"beta_pred_{MODE}"] = np.clip(
+    all_preds[f"beta_{MODE}"], BETA_MIN, BETA_MAX,
 )
-test_df["h2o_mm_pred"] = np.clip(
-    all_preds["h2o_mm_retrieved"], H2O_MM_MIN, H2O_MM_MAX,
+test_df[f"w_pred_{MODE}"] = np.clip(
+    all_preds[f"w_{MODE}"], W_MIN, W_MAX,
 )
 
 test_df.to_csv(PRED_OUT, sep="\t", index=False)

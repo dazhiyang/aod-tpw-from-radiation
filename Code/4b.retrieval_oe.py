@@ -1,5 +1,5 @@
 """
-4.retrieval: Minimalist driver for libRadtran clear-sky simulation.
+4b.retrieval_oe: Minimalist driver for libRadtran clear-sky simulation via Optimal Estimation.
 """
 
 from __future__ import annotations
@@ -17,14 +17,14 @@ except ImportError:
     _tqdm = None
 
 from libRadtran import (
-    LIBRADTRANDIR, CLEARSKY_CONFIG, process_row_ls
+    LIBRADTRANDIR, CLEARSKY_CONFIG, process_row_oe
 )
 
 PROJECT = Path(__file__).resolve().parent.parent
 
 # --- Suffix Handling ---
 INPUT_DATA = Path(os.environ.get("INPUT_DATA", str(PROJECT / "Data" / "train_0.5k.txt")))
-_out_name = INPUT_DATA.name.replace("train", "train_ls") if "train" in INPUT_DATA.name else f"{INPUT_DATA.stem}_ls.txt"
+_out_name = INPUT_DATA.name.replace("train", "train_oe") if "train" in INPUT_DATA.name else f"{INPUT_DATA.stem}_oe.txt"
 OUTPUT_DATA = Path(os.environ.get("OUTPUT_DATA", str(PROJECT / "Data" / _out_name)))
 
 # --- Execution Logic ---
@@ -38,14 +38,14 @@ df = df.set_index("time_utc").sort_index()
 
 print(f"Starting retrieval for {len(df)} rows using libRadtran...")
 
-_ls_fn = lambda r: process_row_ls(r, LIBRADTRANDIR, CLEARSKY_CONFIG)
+_oe_fn = lambda r: process_row_oe(r, LIBRADTRANDIR, CLEARSKY_CONFIG)
 if _tqdm is not None:
-    _tqdm.pandas(desc="LS Beta + H2O", leave=True)
-    results = df.progress_apply(_ls_fn, axis=1)
+    _tqdm.pandas(desc="OE Beta + W", leave=True)
+    results = df.progress_apply(_oe_fn, axis=1)
 else:
-    results = df.apply(_ls_fn, axis=1)
+    results = df.apply(_oe_fn, axis=1)
 
-# Drop input columns that are recomputed in process_row_ls (LHS copies of fluxes and
+# Drop input columns that are recomputed in process_row_oe (LHS copies of fluxes and
 # repeated MERRA scalars) so we do not duplicate column names after concat.
 _overlap = [c for c in results.columns if c in df.columns]
 df_base = df.drop(columns=_overlap, errors="ignore")
@@ -53,7 +53,7 @@ out = pd.concat([df_base, results], axis=1)
 
 cols = [
     "ghi", "bni", "dhi", "ghi_merra", "bni_merra", "dhi_merra",
-    "ghi_ls", "bni_ls", "dhi_ls", "beta_retrieved", "h2o_mm_retrieved",
+    "ghi_oe", "bni_oe", "dhi_oe", "beta_oe", "w_oe",
     "merra_ALPHA", "merra_BETA", "merra_TO3", "merra_TQV", "merra_ALBEDO", "merra_PS", "zenith",
 ]
 final_cols = [c for c in cols if c in out.columns]

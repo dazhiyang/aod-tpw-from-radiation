@@ -16,7 +16,7 @@ MERRA-2 reanalysis supplies prior/ancillary information (ozone, surface pressure
 | 1 | `1.arrange.py` | Reads raw BSRN LR0100 files, merges MERRA-2 priors, applies quality control and clear-sky flagging. |
 | 2 | `2.create_holdout.py` | Filters to clear-sky daytime (zenith ≤ 87°) and splits into a 70 % training pool and 30 % holdout test pool. |
 | 3 | `3.latin_hypercube.py` | Selects a stratified training subset via Latin Hypercube Sampling, mapped to nearest real observations. |
-| 4 | `4.retrieval.py` | Runs the libRadtran forward model and nonlinear least-squares inversion to retrieve (beta, H₂O) for each training row. |
+| 4a | `4a.retrieval_ls.py` | Runs the libRadtran forward model and nonlinear least-squares inversion to retrieve (beta, H₂O) for each training row. |
 | 5 | `5.tabpfn.py` | Trains a TabPFN regressor on the LS-retrieved labels and predicts (beta, H₂O) on the test pool. |
 | 6 | `6.evaluation.py` | Validates predictions by re-running the forward model with the predicted (beta, H₂O) and comparing fluxes. |
 
@@ -94,7 +94,7 @@ Run the scripts in order (step 1 requires raw BSRN data and is typically run onc
 ```bash
 python Code/2.create_holdout.py
 LHS_N=500 python Code/3.latin_hypercube.py
-python Code/4.retrieval.py
+python Code/4a.retrieval_ls.py
 python Code/5.tabpfn.py
 python Code/6.evaluation.py
 ```

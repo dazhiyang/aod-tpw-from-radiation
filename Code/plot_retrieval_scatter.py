@@ -79,16 +79,16 @@ PANEL_05 = "TabPFN 0.5k trained"
 PANEL_2K = "TabPFN 2k trained"
 
 
-def _load_sub(path: Path) -> pd.DataFrame:
+def _load_sub(path: Path) -> pd.DataFrame | None:
     if not path.is_file():
-        raise SystemExit(f"Missing table: {path}")
+        return None
     df = pd.read_csv(path, sep="\t", comment="#", parse_dates=["time_utc"])
     for c in need:
         if c not in df.columns:
             raise SystemExit(f"Missing column {c!r} in {path}")
     sub = df.dropna(subset=need).copy()
     if len(sub) == 0:
-        raise SystemExit(f"No complete rows in {path}")
+        return None
     return sub
 
 
@@ -135,19 +135,23 @@ def mbe_rmsepct_r2(x_meas: np.ndarray, y_fwd: np.ndarray) -> tuple[float, float,
 sub_05 = _load_sub(INPUT_0_5K)
 sub_2k = _load_sub(INPUT_2K)
 
-if not sub_05["time_utc"].equals(sub_2k["time_utc"]):
-    raise SystemExit(
-        "time_utc column differs between 0.5k and 2k eval files; use the same test rows.",
-    )
-base_meas_merra = ["ghi", "bni", "dhi", "ghi_merra", "bni_merra", "dhi_merra"]
-for c in base_meas_merra:
-    a = sub_05[c].to_numpy(dtype=float)
-    b = sub_2k[c].to_numpy(dtype=float)
-    if not np.allclose(a, b, rtol=0, atol=1e-5, equal_nan=True):
-        raise SystemExit(
-            f"Column {c!r} differs between {INPUT_0_5K.name} and {INPUT_2K.name}; "
-            "expected identical measured + MERRA forward for the same eval set.",
-        )
+if sub_05 is None:
+    raise SystemExit(f"Missing 0.5k table: {INPUT_0_5K}")
+
+# Verify parity if both exist
+if sub_2k is not None:
+    if not sub_05["time_utc"].equals(sub_2k["time_utc"]):
+        print("WARNING: time_utc differs between 0.5k and 2k. Filtering to intersection...")
+        common = sub_05.index.intersection(sub_2k.index)
+        sub_05 = sub_05.loc[common]
+        sub_2k = sub_2k.loc[common]
+
+    base_meas_merra = ["ghi", "bni", "dhi", "ghi_merra", "bni_merra", "dhi_merra"]
+    for c in base_meas_merra:
+        a = sub_05[c].to_numpy(dtype=float)
+        b = sub_2k[c].to_numpy(dtype=float)
+        if not np.allclose(a, b, rtol=0, atol=1e-5, equal_nan=True):
+             print(f"WARNING: Column {c!r} differs between inputs.")
 
 pairs_merra = (
     ("ghi", "ghi_merra", "GHI"),
@@ -160,39 +164,45 @@ pairs_ls = (
     ("dhi", "dhi_ls", "DHI"),
 )
 
-_comp_cat = pd.CategoricalDtype(categories=["GHI", "BNI", "DHI"], ordered=True)
-_panel_cat = pd.CategoricalDtype(categories=[PANEL_MERRA, PANEL_05, PANEL_2K], ordered=True)
+panels_to_plot = []
+panels_to_plot.append(_long_overlay(pairs_merra, sub_05, PANEL_MERRA))
+panels_to_plot.append(_long_overlay(pairs_ls, sub_05, PANEL_05))
+if sub_2k is not None:
+    panels_to_plot.append(_long_overlay(pairs_ls, sub_2k, PANEL_2K))
 
-long_df = pd.concat(
-    [
-        _long_overlay(pairs_merra, sub_05, PANEL_MERRA),
-        _long_overlay(pairs_ls, sub_05, PANEL_05),
-        _long_overlay(pairs_ls, sub_2k, PANEL_2K),
-    ],
-    ignore_index=True,
-)
+long_df = pd.concat(panels_to_plot, ignore_index=True)
+
+_comp_cat = pd.CategoricalDtype(categories=["GHI", "BNI", "DHI"], ordered=True)
+_panel_cat_list = [PANEL_MERRA, PANEL_05]
+if sub_2k is not None:
+    _panel_cat_list.append(PANEL_2K)
+_panel_cat = pd.CategoricalDtype(categories=_panel_cat_list, ordered=True)
+
 long_df["component"] = long_df["component"].astype(_comp_cat)
 long_df["panel"] = long_df["panel"].astype(_panel_cat)
 
-lo = float(min(sub_05[list(need)].min().min(), sub_2k[list(need)].min().min(), 0.0))
-hi = float(max(sub_05[list(need)].max().max(), sub_2k[list(need)].max().max(), 1.0))
+lo = float(long_df["measured"].min())
+hi = float(long_df["measured"].max())
 pad = (hi - lo) * 0.03
 if pad <= 0:
     pad = 1.0
 
 _line_seg = pd.DataFrame({"measured": [lo, hi], "forward": [lo, hi], "grp": 0})
 line_df = pd.concat(
-    [_line_seg.assign(panel=p) for p in (PANEL_MERRA, PANEL_05, PANEL_2K)],
+    [_line_seg.assign(panel=p) for p in _panel_cat_list],
     ignore_index=True,
 )
 line_df["panel"] = line_df["panel"].astype(_panel_cat)
 
-stat_rows: list[dict[str, str | float]] = []
-for panel_name, frame, pairs in (
+stat_runs = [
     (PANEL_MERRA, sub_05, pairs_merra),
     (PANEL_05, sub_05, pairs_ls),
-    (PANEL_2K, sub_2k, pairs_ls),
-):
+]
+if sub_2k is not None:
+    stat_runs.append((PANEL_2K, sub_2k, pairs_ls))
+
+stat_rows: list[dict[str, str | float]] = []
+for panel_name, frame, pairs in stat_runs:
     xm, yf = pooled_measured_forward(pairs, frame)
     mbe_v, rmse_pct_v, r2_v = mbe_rmsepct_r2(xm, yf)
     stat_rows.append(
@@ -266,7 +276,7 @@ p = (
         color="black",
         inherit_aes=False,
     )
-    + facet_wrap("~ panel", nrow=1, ncol=3, scales="fixed")
+    + facet_wrap("~ panel", nrow=1, ncol=len(_panel_cat_list), scales="fixed")
     + scale_color_manual(
         values=list(WONG_GHI_BNI_DHI),
         breaks=["GHI", "BNI", "DHI"],

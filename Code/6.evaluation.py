@@ -20,8 +20,9 @@ PROJECT = Path(__file__).resolve().parent.parent
 
 # --- Suffix Handling ---
 K_SUFFIX = os.environ.get("K_SUFFIX", "_0.5k")
-PRED_IN = PROJECT / "Data" / f"test{K_SUFFIX}.txt"
-VAL_OUT = PROJECT / "Data" / f"test_ls{K_SUFFIX}.txt"
+MODE = os.environ.get("MODE", "ls").lower()
+PRED_IN = PROJECT / "Data" / f"pred_{MODE}{K_SUFFIX}.txt"
+VAL_OUT = PROJECT / "Data" / f"test_{MODE}{K_SUFFIX}.txt"
 
 # --- Execution Logic ---
 if not PRED_IN.is_file():
@@ -36,26 +37,26 @@ def run_val(row):
     # 1. MERRA-2 Forward
     merra_sim = forward_merra_explicit(row, LIBRADTRANDIR, CLEARSKY_CONFIG)
     
-    # 2. Predicted (LS) Forward
-    ls_sim = run_clearsky(
+    # 2. Predicted Forward
+    sim_out = run_clearsky(
         row, 
         LIBRADTRANDIR, 
         CLEARSKY_CONFIG, 
-        angstrom_beta=row["beta_pred"], 
-        h2o_mm=row["h2o_mm_pred"]
+        angstrom_beta=row[f"beta_pred_{MODE}"], 
+        w=row[f"w_pred_{MODE}"]
     )
     
     return pd.Series({
         "ghi_merra": merra_sim.get("ghi_sim", np.nan),
         "bni_merra": merra_sim.get("bni_sim", np.nan),
         "dhi_merra": merra_sim.get("dhi_sim", np.nan),
-        "ghi_ls": ls_sim.get("ghi_sim", np.nan),
-        "bni_ls": ls_sim.get("bni_sim", np.nan),
-        "dhi_ls": ls_sim.get("dhi_sim", np.nan)
+        f"ghi_{MODE}": sim_out.get("ghi_sim", np.nan),
+        f"bni_{MODE}": sim_out.get("bni_sim", np.nan),
+        f"dhi_{MODE}": sim_out.get("dhi_sim", np.nan)
     })
 
 # Identify columns to add
-cols = ["ghi_merra", "bni_merra", "dhi_merra", "ghi_ls", "bni_ls", "dhi_ls"]
+cols = ["ghi_merra", "bni_merra", "dhi_merra", f"ghi_{MODE}", f"bni_{MODE}", f"dhi_{MODE}"]
 
 # Define output path early to check for existence
 if VAL_OUT.is_file():
@@ -72,8 +73,8 @@ for col in cols:
     if col not in df.columns:
         df[col] = np.nan
 
-# We only process rows where simulation is missing (checked by ghi_ls as proxy)
-mask = df["ghi_ls"].isna() | df["ghi_merra"].isna()
+# We only process rows where simulation is missing (checked by ghi_{MODE} as proxy)
+mask = df[f"ghi_{MODE}"].isna() | df["ghi_merra"].isna()
 sub = df[mask].copy()
 
 if len(sub) == 0:

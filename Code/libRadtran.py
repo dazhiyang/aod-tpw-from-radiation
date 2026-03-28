@@ -1,6 +1,5 @@
 """
-libRadtran + Optimal Estimation: Forward modeling and parameter retrieval.
-Combined from clearsky_forward.py and oe_retrieve_beta_h2o.py.
+libRadtran + Least Squares / Optimal Estimation: Forward modeling and parameter retrieval.
 """
 
 from __future__ import annotations
@@ -59,13 +58,13 @@ class ClearskyConfig:
 DEFAULT_CLEARSKY_CONFIG = ClearskyConfig()
 CLEARSKY_CONFIG = DEFAULT_CLEARSKY_CONFIG
 
-# OE Parameters
+# LS Parameters
 BETA_MIN = 1e-6
 BETA_MAX = 2.0
-H2O_MM_MIN = 0.05
-H2O_MM_MAX = 80.0
+W_MIN = 0.05
+W_MAX = 80.0
 DIFF_STEP_BETA = 0.002
-DIFF_STEP_H2O_MM = 0.05
+DIFF_STEP_W = 0.05
 MAX_NFEV = 40
 JAC_MODE = "2-point"
 FAILURE_PENALTY = 1e6
@@ -80,7 +79,7 @@ def _resolve_physics(
     config: ClearskyConfig,
     *,
     o3_du: float | None = None,
-    h2o_mm: float | None = None,
+    w: float | None = None,
     albedo: float | None = None,
     pressure_hpa: float | None = None,
     angstrom_alpha: float | None = None,
@@ -90,7 +89,7 @@ def _resolve_physics(
     """
     Acts as a parameter arbitrator that prepares the physical inputs required for a libRadtran simulation. 
     It resolves geometry, albedo, pressure, and gas/aerosol optics, prioritizing explicit overrides 
-    (typically from Optimal Estimation) over the background MERRA-2 or BSRN data columns.
+    (typically from Least Squares) over the background MERRA-2 or BSRN data columns.
 
     Parameters:
     ------------
@@ -100,7 +99,7 @@ def _resolve_physics(
         Reference for default headers and unit scaling factors.
     o3_du : float, optional
         Override for total column ozone (in DU).
-    h2o_mm : float, optional
+    w : float, optional
         Override for precipitable water (in mm).
     albedo : float, optional
         Override for surface albedo (0 to 1).
@@ -115,16 +114,16 @@ def _resolve_physics(
 
     Returns:
     ------------
-    Return (sza, albedo, p_hpa, o3_du, h2o_mm, alpha, beta). Overrides beat ``row``.
+    Return (sza, albedo, p_hpa, o3_du, w, alpha, beta). Overrides beat ``row``.
     """
     sza = float(row[config.sza_column]) if sza_deg is None else float(sza_deg)
     alb = float(row["merra_ALBEDO"]) if albedo is None else float(albedo)
     p = float(row["merra_PS"]) if pressure_hpa is None else float(pressure_hpa)
     o3 = float(row["merra_TO3"]) * config.to3_bsrn_to_du if o3_du is None else float(o3_du)
-    h2o = float(row["merra_TQV"]) * config.tqv_bsrn_to_mm_pw if h2o_mm is None else float(h2o_mm)
+    w_v = float(row["merra_TQV"]) * config.tqv_bsrn_to_mm_pw if w is None else float(w)
     a = float(row["merra_ALPHA"]) if angstrom_alpha is None else float(angstrom_alpha)
     b = float(row["merra_BETA"]) if angstrom_beta is None else float(angstrom_beta)
-    return sza, alb, p, o3, h2o, a, b
+    return sza, alb, p, o3, w_v, a, b
 
 def merra_explicit_physics(row: pd.Series, config: ClearskyConfig) -> tuple[float, float, float, float]:
     """
@@ -139,15 +138,15 @@ def merra_explicit_physics(row: pd.Series, config: ClearskyConfig) -> tuple[floa
 
     Returns:
     ------------
-    (alpha, o3_du, beta, h2o_mm) : tuple of 4 floats.
+    (alpha, o3_du, beta, w) : tuple of 4 floats.
     """
     alpha_m = float(row["merra_ALPHA"])
     o3_du_m = float(row["merra_TO3"]) * config.to3_bsrn_to_du
     beta_m = float(row["merra_BETA"])
-    h2o_mm_m = float(row["merra_TQV"]) * config.tqv_bsrn_to_mm_pw
-    return alpha_m, o3_du_m, beta_m, h2o_mm_m
+    w_m = float(row["merra_TQV"]) * config.tqv_bsrn_to_mm_pw
+    return alpha_m, o3_du_m, beta_m, w_m
 
-def row_skip_oe(row: pd.Series) -> bool:
+def row_skip_ls(row: pd.Series) -> bool:
     """
     Determines whether a row should be skipped due to solar zenith angle or missing data.
     
@@ -178,7 +177,7 @@ def build_uvspec_input(
     config: ClearskyConfig = DEFAULT_CLEARSKY_CONFIG,
     *,
     o3_du: float | None = None,
-    h2o_mm: float | None = None,
+    w: float | None = None,
     albedo: float | None = None,
     pressure_hpa: float | None = None,
     angstrom_alpha: float | None = None,
@@ -198,7 +197,7 @@ def build_uvspec_input(
         Simulation configuration defaults.
     o3_du : float, optional
         Override for total column ozone (DU).
-    h2o_mm : float, optional
+    w : float, optional
         Override for precipitable water (mm).
     albedo : float, optional
         Override for surface albedo (0-1).
@@ -220,8 +219,8 @@ def build_uvspec_input(
     atmo_path = f"{data_dir}/{config.atmosphere_file}"
     solar_path = f"{data_dir}/{config.source_solar}"
 
-    sza, albedo_v, pressure_hpa_v, o3_v, h2o_mm_v, a, b = _resolve_physics(
-        row, config, o3_du=o3_du, h2o_mm=h2o_mm, albedo=albedo,
+    sza, albedo_v, pressure_hpa_v, o3_v, w_v, a, b = _resolve_physics(
+        row, config, o3_du=o3_du, w=w, albedo=albedo,
         pressure_hpa=pressure_hpa, angstrom_alpha=angstrom_alpha,
         angstrom_beta=angstrom_beta, sza_deg=sza_deg,
     )
@@ -237,8 +236,8 @@ def build_uvspec_input(
 
     if np.isfinite(o3_v) and o3_v > 0.0:
         lines.append(f"mol_modify O3 {o3_v:.6f} DU")
-    if np.isfinite(h2o_mm_v) and h2o_mm_v > 0.0:
-        lines.append(f"mol_modify h2o {h2o_mm_v:.6f} MM")
+    if np.isfinite(w_v) and w_v > 0.0:
+        lines.append(f"mol_modify h2o {w_v:.6f} MM")
 
     lines.extend([
         f"pressure {pressure_hpa_v:.6f}",
@@ -280,7 +279,7 @@ def run_clearsky(
     config: ClearskyConfig = DEFAULT_CLEARSKY_CONFIG,
     *,
     o3_du: float | None = None,
-    h2o_mm: float | None = None,
+    w: float | None = None,
     albedo: float | None = None,
     pressure_hpa: float | None = None,
     angstrom_alpha: float | None = None,
@@ -301,7 +300,7 @@ def run_clearsky(
         Simulation configuration defaults.
     o3_du : float, optional
         Override for total column ozone (DU).
-    h2o_mm : float, optional
+    w : float, optional
         Override for precipitable water (mm).
     albedo : float, optional
         Override for surface albedo (0-1).
@@ -322,7 +321,7 @@ def run_clearsky(
         Series with 'ghi_sim', 'bni_sim', and 'dhi_sim' [W m-2].
     """
     sza, _, _, _, _, a, b = _resolve_physics(
-        row, config, o3_du=o3_du, h2o_mm=h2o_mm, albedo=albedo,
+        row, config, o3_du=o3_du, w=w, albedo=albedo,
         pressure_hpa=pressure_hpa, angstrom_alpha=angstrom_alpha,
         angstrom_beta=angstrom_beta, sza_deg=sza_deg,
     )
@@ -337,7 +336,7 @@ def run_clearsky(
 
     uvspec_exe = os.path.join(libradtran_dir, "bin", "uvspec")
     inp_content = build_uvspec_input(
-        row, libradtran_dir, config, o3_du=o3_du, h2o_mm=h2o_mm, albedo=albedo,
+        row, libradtran_dir, config, o3_du=o3_du, w=w, albedo=albedo,
         pressure_hpa=pressure_hpa, angstrom_alpha=angstrom_alpha,
         angstrom_beta=angstrom_beta, sza_deg=sza_deg,
     )
@@ -367,7 +366,7 @@ def run_clearsky(
 
     return pd.Series({"ghi_sim": ghi_sim, "bni_sim": bni_sim, "dhi_sim": dhi_sim}, dtype=float)
 
-def calculate_residuals_oe(
+def calculate_residuals_ls(
     x: np.ndarray, row: pd.Series, libradtran_dir: str,
     config: ClearskyConfig, alpha_m: float, o3_du_m: float,
 ) -> np.ndarray:
@@ -377,7 +376,7 @@ def calculate_residuals_oe(
     Parameters:
     ------------
     x : np.ndarray
-        Sample state vector [beta, h2o_mm].
+        Sample state vector [beta, w].
     row : pd.Series
         Data row with measured 'ghi', 'bni', and 'dhi'.
     libradtran_dir : str
@@ -394,10 +393,10 @@ def calculate_residuals_oe(
     residuals : np.ndarray
         Array of (sim - meas) for GHI, BNI, DHI.
     """
-    beta, h2o_mm = float(x[0]), float(x[1])
+    beta, w = float(x[0]), float(x[1])
     sim = run_clearsky(
         row, libradtran_dir, config, angstrom_alpha=alpha_m, o3_du=o3_du_m,
-        angstrom_beta=beta, h2o_mm=h2o_mm, quiet=True,
+        angstrom_beta=beta, w=w, quiet=True,
     )
     if pd.isna(sim["ghi_sim"]) or pd.isna(sim["bni_sim"]) or pd.isna(sim["dhi_sim"]):
         return np.full(3, FAILURE_PENALTY, dtype=float)
@@ -409,7 +408,7 @@ def calculate_residuals_oe(
         return np.full(3, FAILURE_PENALTY, dtype=float)
     return y_sim - y_meas
 
-def retrieve_beta_h2o_one_row(
+def retrieve_one_row_ls(
     row: pd.Series, libradtran_dir: str, config: ClearskyConfig = DEFAULT_CLEARSKY_CONFIG,
 ) -> tuple[float, float, bool, float | None]:
     """
@@ -426,24 +425,24 @@ def retrieve_beta_h2o_one_row(
 
     Returns:
     ------------
-    (beta, h2o, success, cost) : tuple
+    (beta, w, success, cost) : tuple
         The retrieved values and optimization status.
     """
-    if row_skip_oe(row):
+    if row_skip_ls(row):
         return np.nan, np.nan, False, None
 
-    alpha_m, o3_du_m, beta0, h2o0 = merra_explicit_physics(row, config)
-    x0 = np.array([beta0, h2o0], dtype=float)
-    bounds = (np.array([BETA_MIN, H2O_MM_MIN]), np.array([BETA_MAX, H2O_MM_MAX]))
-    diff_step = np.array([DIFF_STEP_BETA, DIFF_STEP_H2O_MM])
+    alpha_m, o3_du_m, beta0, w0 = merra_explicit_physics(row, config)
+    x0 = np.array([beta0, w0], dtype=float)
+    bounds = (np.array([BETA_MIN, W_MIN]), np.array([BETA_MAX, W_MAX]))
+    diff_step = np.array([DIFF_STEP_BETA, DIFF_STEP_W])
 
     try:
         result = least_squares(
-            calculate_residuals_oe, x0, args=(row, libradtran_dir, config, alpha_m, o3_du_m),
+            calculate_residuals_ls, x0, args=(row, libradtran_dir, config, alpha_m, o3_du_m),
             bounds=bounds, jac=JAC_MODE, diff_step=diff_step, max_nfev=MAX_NFEV,
         )
     except Exception as e:
-        print(f"OE failed at {row.name}: {e}")
+        print(f"LS failed at {row.name}: {e}")
         return np.nan, np.nan, False, None
 
     cost = float(result.cost) if hasattr(result, "cost") else None
@@ -471,10 +470,10 @@ def forward_merra_explicit(row: pd.Series, libradtran_dir: str, config: Clearsky
     fluxes : pd.Series
         Simulated clear-sky fluxes.
     """
-    alpha_m, o3_du_m, beta_m, h2o_mm_m = merra_explicit_physics(row, config)
+    alpha_m, o3_du_m, beta_m, w_m = merra_explicit_physics(row, config)
     return run_clearsky(
         row, libradtran_dir, config, angstrom_alpha=alpha_m, o3_du=o3_du_m,
-        angstrom_beta=beta_m, h2o_mm=h2o_mm_m, quiet=quiet,
+        angstrom_beta=beta_m, w=w_m, quiet=quiet,
     )
 
 def process_row_ls(row: pd.Series, libradtran_dir: str, config: ClearskyConfig) -> pd.Series:
@@ -495,19 +494,146 @@ def process_row_ls(row: pd.Series, libradtran_dir: str, config: ClearskyConfig) 
     result : pd.Series
         Series combining original data with simulated fluxes and retrieved params.
     """
-    alpha_m, o3_du_m, beta_m, h2o_mm_m = merra_explicit_physics(row, config)
+    alpha_m, o3_du_m, beta_m, w_m = merra_explicit_physics(row, config)
 
     merra_sim = forward_merra_explicit(row, libradtran_dir, config, quiet=True)
     ghi_m = float(merra_sim["ghi_sim"]) if pd.notna(merra_sim["ghi_sim"]) else np.nan
     bni_m = float(merra_sim["bni_sim"]) if pd.notna(merra_sim["bni_sim"]) else np.nan
     dhi_m = float(merra_sim["dhi_sim"]) if pd.notna(merra_sim["dhi_sim"]) else np.nan
 
-    beta_hat, h2o_hat, ok, _cost = retrieve_beta_h2o_one_row(row, libradtran_dir, config)
+    beta_ls, w_ls, ok, _cost = retrieve_one_row_ls(row, libradtran_dir, config)
 
-    if ok and np.isfinite(beta_hat) and np.isfinite(h2o_hat):
+    if ok and np.isfinite(beta_ls) and np.isfinite(w_ls):
+        ls_sim = run_clearsky(
+            row, libradtran_dir, config, angstrom_alpha=alpha_m, o3_du=o3_du_m,
+            angstrom_beta=beta_ls, w=w_ls, quiet=True,
+        )
+        ghi_o = float(ls_sim["ghi_sim"]) if pd.notna(ls_sim["ghi_sim"]) else np.nan
+        bni_o = float(ls_sim["bni_sim"]) if pd.notna(ls_sim["bni_sim"]) else np.nan
+        dhi_o = float(ls_sim["dhi_sim"]) if pd.notna(ls_sim["dhi_sim"]) else np.nan
+    else:
+        ghi_o = bni_o = dhi_o = np.nan
+
+    return pd.Series({
+        "ghi_merra": ghi_m, "bni_merra": bni_m, "dhi_merra": dhi_m,
+        "ghi_ls": ghi_o, "bni_ls": bni_o, "dhi_ls": dhi_o,
+        "beta_ls": beta_ls, "w_ls": w_ls,
+        "merra_ALPHA": alpha_m, "merra_BETA": beta_m,
+        "merra_TO3": float(row["merra_TO3"]), "merra_TQV": float(row["merra_TQV"]),
+    })
+
+def calculate_residuals_oe(
+    x: np.ndarray, row: pd.Series, libradtran_dir: str,
+    config: ClearskyConfig, alpha_m: float, o3_du_m: float,
+    x_prior: np.ndarray, y_err: np.ndarray, x_err: np.ndarray
+) -> np.ndarray:
+    """
+    Calculates the OE weighted residuals for both measurements and priors.
+    """
+    beta, w = float(x[0]), float(x[1])
+    
+    # 1. Forward Model
+    sim = run_clearsky(
+        row, libradtran_dir, config, angstrom_alpha=alpha_m, o3_du=o3_du_m,
+        angstrom_beta=beta, w=w, quiet=True,
+    )
+    
+    # 2. Extract Data
+    y_meas = np.array([float(row["ghi"]), float(row["bni"]), float(row["dhi"])], dtype=float)
+    y_sim = np.array([float(sim["ghi_sim"]), float(sim["bni_sim"]), float(sim["dhi_sim"])], dtype=float)
+    
+    # Handle failure: Return a massive penalty array matching the expected length (3 meas + 2 prior = 5)
+    if not np.isfinite(y_sim).all() or not np.isfinite(y_meas).all():
+        return np.full(5, FAILURE_PENALTY, dtype=float)
+        
+    # 3. Calculate Weighted Measurement Residuals
+    res_y = (y_sim - y_meas) / y_err
+    
+    # 4. Calculate Weighted Prior Residuals
+    res_x = (x - x_prior) / x_err
+    
+    # 5. Concatenate for the least_squares solver
+    return np.concatenate((res_y, res_x))
+
+def retrieve_one_row_oe(
+    row: pd.Series, libradtran_dir: str, config: ClearskyConfig = DEFAULT_CLEARSKY_CONFIG,
+) -> tuple[float, float, bool, float | None]:
+    
+    if row_skip_ls(row):
+        return np.nan, np.nan, False, None
+
+    alpha_m, o3_du_m, beta0, w0 = merra_explicit_physics(row, config)
+    
+    # --- The Optimal Estimation Setup ---
+    x_prior = np.array([beta0, w0], dtype=float)
+    
+    # 1. Dynamic Measurement Uncertainties (y_err)
+    ghi_meas = float(row["ghi"])
+    bni_meas = float(row["bni"])
+    dhi_meas = float(row["dhi"])
+    
+    # Use max(percentage, absolute_floor) to protect against zero-offsets at twilight
+    # GHI: ~2% error, minimum floor of 5.0 W/m^2
+    ghi_err = max(0.02 * ghi_meas, 5.0)
+    
+    # BNI: ~1% error (pyrheliometers are highly accurate), minimum floor of 2.0 W/m^2
+    bni_err = max(0.01 * bni_meas, 2.0)
+    
+    # DHI: ~3% error (shaded pyranometers have slightly higher relative uncertainty), floor of 5.0 W/m^2
+    dhi_err = max(0.03 * dhi_meas, 5.0)
+    
+    y_err = np.array([ghi_err, bni_err, dhi_err], dtype=float) 
+    
+    # 2. Dynamic Prior Uncertainties (x_err / S_a)
+    # Water Vapor: MERRA-2 is robust. Assign ~15% relative uncertainty, minimum floor of 2.0 mm.
+    w_err = max(0.15 * w0, 2.0)
+    
+    # Aerosol Turbidity: MERRA-2 is a bulk grid average. Local station conditions vary wildly.
+    # Assign ~50% relative uncertainty to allow BSRN data to pull the state, minimum floor of 0.1.
+    beta_err = max(0.50 * beta0, 0.1)
+    
+    x_err = np.array([beta_err, w_err], dtype=float) 
+    
+    x0 = np.array([beta0, w0], dtype=float)
+    bounds = (np.array([BETA_MIN, W_MIN]), np.array([BETA_MAX, W_MAX]))
+    diff_step = np.array([DIFF_STEP_BETA, DIFF_STEP_W])
+
+    try:
+        result = least_squares(
+            calculate_residuals_oe, 
+            x0, 
+            args=(row, libradtran_dir, config, alpha_m, o3_du_m, x_prior, y_err, x_err),
+            bounds=bounds, 
+            jac=JAC_MODE, 
+            diff_step=diff_step, 
+            max_nfev=MAX_NFEV,
+        )
+    except Exception as e:
+        print(f"OE failed at {row.name}: {e}")
+        return np.nan, np.nan, False, None
+
+    cost = float(result.cost) if hasattr(result, "cost") else None
+    if result.success:
+        return float(result.x[0]), float(result.x[1]), True, cost
+    return np.nan, np.nan, False, cost
+
+def process_row_oe(row: pd.Series, libradtran_dir: str, config: ClearskyConfig) -> pd.Series:
+    """
+    High-level handler: runs MERRA forward, performs OE retrieval, and runs OE forward.
+    """
+    alpha_m, o3_du_m, beta_m, w_m = merra_explicit_physics(row, config)
+
+    merra_sim = forward_merra_explicit(row, libradtran_dir, config, quiet=True)
+    ghi_m = float(merra_sim["ghi_sim"]) if pd.notna(merra_sim["ghi_sim"]) else np.nan
+    bni_m = float(merra_sim["bni_sim"]) if pd.notna(merra_sim["bni_sim"]) else np.nan
+    dhi_m = float(merra_sim["dhi_sim"]) if pd.notna(merra_sim["dhi_sim"]) else np.nan
+
+    beta_oe, w_oe, ok, _cost = retrieve_one_row_oe(row, libradtran_dir, config)
+
+    if ok and np.isfinite(beta_oe) and np.isfinite(w_oe):
         oe_sim = run_clearsky(
             row, libradtran_dir, config, angstrom_alpha=alpha_m, o3_du=o3_du_m,
-            angstrom_beta=beta_hat, h2o_mm=h2o_hat, quiet=True,
+            angstrom_beta=beta_oe, w=w_oe, quiet=True,
         )
         ghi_o = float(oe_sim["ghi_sim"]) if pd.notna(oe_sim["ghi_sim"]) else np.nan
         bni_o = float(oe_sim["bni_sim"]) if pd.notna(oe_sim["bni_sim"]) else np.nan
@@ -517,13 +643,13 @@ def process_row_ls(row: pd.Series, libradtran_dir: str, config: ClearskyConfig) 
 
     return pd.Series({
         "ghi_merra": ghi_m, "bni_merra": bni_m, "dhi_merra": dhi_m,
-        "ghi_ls": ghi_o, "bni_ls": bni_o, "dhi_ls": dhi_o,
-        "beta_retrieved": beta_hat, "h2o_mm_retrieved": h2o_hat,
+        "ghi_oe": ghi_o, "bni_oe": bni_o, "dhi_oe": dhi_o,
+        "beta_oe": beta_oe, "w_oe": w_oe,
         "merra_ALPHA": alpha_m, "merra_BETA": beta_m,
         "merra_TO3": float(row["merra_TO3"]), "merra_TQV": float(row["merra_TQV"]),
     })
 
 
 # =============================================================================
-# End of 0.libRadtran.py (Library)
+# End of libRadtran.py (Library)
 # =============================================================================
