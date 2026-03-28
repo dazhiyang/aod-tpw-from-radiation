@@ -13,6 +13,8 @@ import numpy as np
 import torch
 from tabpfn import TabPFNRegressor
 
+from libRadtran import BETA_MAX, BETA_MIN, H2O_MM_MAX, H2O_MM_MIN
+
 PROJECT = Path(__file__).resolve().parent.parent
 
 # --- Suffix & Sampling Handling ---
@@ -79,9 +81,13 @@ for target in TARGETS:
         preds_list.append(model.predict(batch_X))
     all_preds[target] = np.concatenate(preds_list)
 
-# Save predictions
-test_df["beta_pred"] = all_preds["beta_retrieved"]
-test_df["h2o_mm_pred"] = all_preds["h2o_mm_retrieved"]
+# Save predictions (clip to forward-model bounds; matches libRadtran.retrieve_beta_h2o_one_row)
+test_df["beta_pred"] = np.clip(
+    all_preds["beta_retrieved"], BETA_MIN, BETA_MAX,
+)
+test_df["h2o_mm_pred"] = np.clip(
+    all_preds["h2o_mm_retrieved"], H2O_MM_MIN, H2O_MM_MAX,
+)
 
 test_df.to_csv(PRED_OUT, sep="\t", index=False)
 print(f"Successfully saved predictions to {PRED_OUT.name}")

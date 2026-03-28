@@ -1,18 +1,12 @@
 """
-Scatter plots: one row, three panels — **MERRA-2**, **TabPFN 0.5k**, **TabPFN 2k**.
+2×2 scatter comparison: same test rows, TabPFN 0.5k vs TabPFN 2k.
 
-Each panel overlays **GHI, BNI, DHI** (Wong colors) as measured vs libRadtran forward for that
-source. MERRA-2 and LS fluxes come from ``6.evaluation.py`` outputs; the 0.5k and 2k panels use
-``*_ls`` columns from the respective ``test_ls_*.txt`` files (same test instants).
+Columns (left → right): **MERRA-2** | **Retrieval**. Rows: **TabPFN 0.5k** | **TabPFN 2k**.
+Shared axis limits, Wong palette, SKILL styling (8 pt, 0.3 pt, Times New Roman).
 
-Pooled statistics (GHI + BNI + DHI, all rows) per panel: MBE [W m⁻²], RMSE%, R².
-
-Env: ``PLOT_INPUT_0_5K`` (default ``Data/test_ls_0.5k.txt``), ``PLOT_INPUT_2K`` (default
-``Data/test_ls_2k.txt``). If ``PLOT_INPUT`` is set and ``PLOT_INPUT_0_5K`` is not, ``PLOT_INPUT``
-is used as the 0.5k path. ``PLOT_OUTPUT``, ``PLOT_WIDTH_MM`` (default **160**), ``PLOT_HEIGHT_MM``
-(default **56**), ``PLOT_SHOW``, ``PLOT_OPEN``.
-
-Requires: pandas, numpy, plotnine, matplotlib.
+Env: ``PLOT_INPUT_0_5K``, ``PLOT_INPUT_2K`` (paths to ``test_ls_*.txt``),
+``PLOT_OUTPUT``, ``PLOT_WIDTH_MM`` (default **160**), ``PLOT_HEIGHT_MM`` (default **100**),
+``PLOT_SHOW``, ``PLOT_OPEN`` (same semantics as ``plot_retrieval_scatter.py``).
 """
 
 from __future__ import annotations
@@ -31,7 +25,7 @@ from plotnine import (
     element_line,
     element_rect,
     element_text,
-    facet_wrap,
+    facet_grid,
     geom_line,
     geom_point,
     geom_text,
@@ -44,17 +38,14 @@ from plotnine.themes.elements.margin import margin
 
 PROJECT = Path(__file__).resolve().parent.parent
 INPUT_0_5K = Path(
-    os.environ.get(
-        "PLOT_INPUT_0_5K",
-        os.environ.get("PLOT_INPUT", str(PROJECT / "Data" / "test_ls_0.5k.txt")),
-    ),
+    os.environ.get("PLOT_INPUT_0_5K", str(PROJECT / "Data" / "test_ls_0.5k.txt")),
 )
 INPUT_2K = Path(os.environ.get("PLOT_INPUT_2K", str(PROJECT / "Data" / "test_ls_2k.txt")))
 OUTPUT_PNG = Path(
     os.environ.get(
         "PLOT_OUTPUT",
-        str(PROJECT / "tex" / "figures" / "retrieval_scatter_merra_ls.png"),
-    )
+        str(PROJECT / "tex" / "figures" / "retrieval_scatter_tabpfn_compare.png"),
+    ),
 )
 
 FIG_W_MM = float(os.environ.get("PLOT_WIDTH_MM", "160"))
@@ -73,37 +64,21 @@ need = [
     "bni_ls",
     "dhi_ls",
 ]
+pairs_merra = (
+    ("ghi", "ghi_merra", "GHI"),
+    ("bni", "bni_merra", "BNI"),
+    ("dhi", "dhi_merra", "DHI"),
+)
+pairs_ls = (
+    ("ghi", "ghi_ls", "GHI"),
+    ("bni", "bni_ls", "BNI"),
+    ("dhi", "dhi_ls", "DHI"),
+)
 
-PANEL_MERRA = "MERRA-2"
-PANEL_05 = "TabPFN 0.5k trained"
-PANEL_2K = "TabPFN 2k trained"
-
-
-def _load_sub(path: Path) -> pd.DataFrame:
-    if not path.is_file():
-        raise SystemExit(f"Missing table: {path}")
-    df = pd.read_csv(path, sep="\t", comment="#", parse_dates=["time_utc"])
-    for c in need:
-        if c not in df.columns:
-            raise SystemExit(f"Missing column {c!r} in {path}")
-    sub = df.dropna(subset=need).copy()
-    if len(sub) == 0:
-        raise SystemExit(f"No complete rows in {path}")
-    return sub
-
-
-def _long_overlay(
-    pairs: tuple[tuple[str, str, str], ...],
-    frame: pd.DataFrame,
-    panel: str,
-) -> pd.DataFrame:
-    parts: list[pd.DataFrame] = []
-    for xcol, ycol, comp in pairs:
-        t = frame[[xcol, ycol]].rename(columns={xcol: "measured", ycol: "forward"})
-        t["component"] = comp
-        t["panel"] = panel
-        parts.append(t)
-    return pd.concat(parts, ignore_index=True)
+panel_left = "MERRA-2"
+panel_right = "Retrieval"
+row_0_5k = "TabPFN 0.5k"
+row_2k = "TabPFN 2k"
 
 
 def pooled_measured_forward(
@@ -132,85 +107,102 @@ def mbe_rmsepct_r2(x_meas: np.ndarray, y_fwd: np.ndarray) -> tuple[float, float,
     return mbe, rmse_pct, r2
 
 
+def _long_points(
+    pairs: tuple[tuple[str, str, str], ...],
+    frame: pd.DataFrame,
+    panel: str,
+    tab_row: str,
+) -> pd.DataFrame:
+    parts: list[pd.DataFrame] = []
+    for xcol, ycol, comp in pairs:
+        t = frame[[xcol, ycol]].rename(columns={xcol: "measured", ycol: "forward"})
+        t["component"] = comp
+        t["panel"] = panel
+        t["tab_row"] = tab_row
+        parts.append(t)
+    return pd.concat(parts, ignore_index=True)
+
+
+def _load_sub(path: Path) -> pd.DataFrame:
+    if not path.is_file():
+        raise SystemExit(f"Missing table: {path}")
+    df = pd.read_csv(path, sep="\t", comment="#", parse_dates=["time_utc"])
+    for c in need:
+        if c not in df.columns:
+            raise SystemExit(f"Missing column {c!r} in {path}")
+    sub = df.dropna(subset=need).copy()
+    if len(sub) == 0:
+        raise SystemExit(f"No complete rows in {path}")
+    return sub
+
+
 sub_05 = _load_sub(INPUT_0_5K)
 sub_2k = _load_sub(INPUT_2K)
 
-if not sub_05["time_utc"].equals(sub_2k["time_utc"]):
-    raise SystemExit(
-        "time_utc column differs between 0.5k and 2k eval files; use the same test rows.",
-    )
-base_meas_merra = ["ghi", "bni", "dhi", "ghi_merra", "bni_merra", "dhi_merra"]
-for c in base_meas_merra:
-    a = sub_05[c].to_numpy(dtype=float)
-    b = sub_2k[c].to_numpy(dtype=float)
-    if not np.allclose(a, b, rtol=0, atol=1e-5, equal_nan=True):
-        raise SystemExit(
-            f"Column {c!r} differs between {INPUT_0_5K.name} and {INPUT_2K.name}; "
-            "expected identical measured + MERRA forward for the same eval set.",
-        )
-
-pairs_merra = (
-    ("ghi", "ghi_merra", "GHI"),
-    ("bni", "bni_merra", "BNI"),
-    ("dhi", "dhi_merra", "DHI"),
+lo = float(
+    min(
+        sub_05[list(need)].min().min(),
+        sub_2k[list(need)].min().min(),
+        0.0,
+    ),
 )
-pairs_ls = (
-    ("ghi", "ghi_ls", "GHI"),
-    ("bni", "bni_ls", "BNI"),
-    ("dhi", "dhi_ls", "DHI"),
+hi = float(
+    max(
+        sub_05[list(need)].max().max(),
+        sub_2k[list(need)].max().max(),
+        1.0,
+    ),
 )
-
-_comp_cat = pd.CategoricalDtype(categories=["GHI", "BNI", "DHI"], ordered=True)
-_panel_cat = pd.CategoricalDtype(categories=[PANEL_MERRA, PANEL_05, PANEL_2K], ordered=True)
-
-long_df = pd.concat(
-    [
-        _long_overlay(pairs_merra, sub_05, PANEL_MERRA),
-        _long_overlay(pairs_ls, sub_05, PANEL_05),
-        _long_overlay(pairs_ls, sub_2k, PANEL_2K),
-    ],
-    ignore_index=True,
-)
-long_df["component"] = long_df["component"].astype(_comp_cat)
-long_df["panel"] = long_df["panel"].astype(_panel_cat)
-
-lo = float(min(sub_05[list(need)].min().min(), sub_2k[list(need)].min().min(), 0.0))
-hi = float(max(sub_05[list(need)].max().max(), sub_2k[list(need)].max().max(), 1.0))
 pad = (hi - lo) * 0.03
 if pad <= 0:
     pad = 1.0
 
-_line_seg = pd.DataFrame({"measured": [lo, hi], "forward": [lo, hi], "grp": 0})
-line_df = pd.concat(
-    [_line_seg.assign(panel=p) for p in (PANEL_MERRA, PANEL_05, PANEL_2K)],
+long_df = pd.concat(
+    [
+        _long_points(pairs_merra, sub_05, panel_left, row_0_5k),
+        _long_points(pairs_ls, sub_05, panel_right, row_0_5k),
+        _long_points(pairs_merra, sub_2k, panel_left, row_2k),
+        _long_points(pairs_ls, sub_2k, panel_right, row_2k),
+    ],
     ignore_index=True,
 )
+
+_panel_cat = pd.CategoricalDtype(categories=[panel_left, panel_right], ordered=True)
+_tab_cat = pd.CategoricalDtype(categories=[row_0_5k, row_2k], ordered=True)
+long_df["panel"] = long_df["panel"].astype(_panel_cat)
+long_df["tab_row"] = long_df["tab_row"].astype(_tab_cat)
+
+_line_seg = pd.DataFrame({"measured": [lo, hi], "forward": [lo, hi], "grp": 0})
+line_parts: list[pd.DataFrame] = []
+for tr in (row_0_5k, row_2k):
+    for pan in (panel_left, panel_right):
+        line_parts.append(_line_seg.assign(panel=pan, tab_row=tr))
+line_df = pd.concat(line_parts, ignore_index=True)
 line_df["panel"] = line_df["panel"].astype(_panel_cat)
+line_df["tab_row"] = line_df["tab_row"].astype(_tab_cat)
 
 stat_rows: list[dict[str, str | float]] = []
-for panel_name, frame, pairs in (
-    (PANEL_MERRA, sub_05, pairs_merra),
-    (PANEL_05, sub_05, pairs_ls),
-    (PANEL_2K, sub_2k, pairs_ls),
-):
-    xm, yf = pooled_measured_forward(pairs, frame)
-    mbe_v, rmse_pct_v, r2_v = mbe_rmsepct_r2(xm, yf)
-    stat_rows.append(
-        {
-            "panel": panel_name,
-            "measured": hi - pad,
-            "forward": lo + pad,
-            "label": (
-                f"MBE = {mbe_v:.2f} W m$^{{-2}}$\n"
-                f"RMSE% = {rmse_pct_v:.2f} %\n"
-                f"$R^2$ = {r2_v:.3f}"
-            ),
-        },
-    )
+for tab_label, frame in ((row_0_5k, sub_05), (row_2k, sub_2k)):
+    for panel_name, pairs in ((panel_left, pairs_merra), (panel_right, pairs_ls)):
+        xm, yf = pooled_measured_forward(pairs, frame)
+        mbe_v, rmse_pct_v, r2_v = mbe_rmsepct_r2(xm, yf)
+        stat_rows.append(
+            {
+                "tab_row": tab_label,
+                "panel": panel_name,
+                "measured": hi - pad,
+                "forward": lo + pad,
+                "label": (
+                    f"MBE = {mbe_v:.2f} W m$^{{-2}}$\n"
+                    f"RMSE% = {rmse_pct_v:.2f} %\n"
+                    f"$R^2$ = {r2_v:.3f}"
+                ),
+            },
+        )
 stat_df = pd.DataFrame(stat_rows)
 stat_df["panel"] = stat_df["panel"].astype(_panel_cat)
+stat_df["tab_row"] = stat_df["tab_row"].astype(_tab_cat)
 
-_pt_size = 0.9
 _theme = theme(
     text=element_text(family="Times New Roman", size=8),
     axis_text=element_text(size=8),
@@ -226,6 +218,7 @@ _theme = theme(
         margin=margin(t=0.3, r=1, b=0.3, l=1, unit="pt"),
     ),
     panel_spacing_x=0.006,
+    panel_spacing_y=0.008,
     panel_grid_major=element_line(color="#A8A8A8", size=0.3, alpha=0.35),
     panel_grid_minor=element_blank(),
     axis_line=element_line(color="black", size=0.3),
@@ -245,6 +238,7 @@ _theme = theme(
     strip_background=element_rect(fill="white", color="#BFBFBF", size=0.3),
 )
 
+_pt_size = 0.9
 p = (
     ggplot(long_df, aes(x="measured", y="forward", color="component"))
     + geom_point(size=_pt_size, alpha=0.55, stroke=0)
@@ -266,7 +260,7 @@ p = (
         color="black",
         inherit_aes=False,
     )
-    + facet_wrap("~ panel", nrow=1, ncol=3, scales="fixed")
+    + facet_grid("tab_row ~ panel", scales="fixed")
     + scale_color_manual(
         values=list(WONG_GHI_BNI_DHI),
         breaks=["GHI", "BNI", "DHI"],
