@@ -2,10 +2,10 @@
 Scatter plots: MERRA-2 forward vs measured, and OE forward vs measured (side by side).
 
 Reads tab-separated output from ``3.retrieval.py`` / ``oe_retrieve_beta_h2o.py`` (e.g.
-``Data/train_oe_beta_h2o.txt``). Each panel overlays GHI, beam (measured BNI vs modeled DNI),
-and DHI. Draws a 1:1 line; axis limits match across panels for comparability.
+``Data/train_oe_beta_h2o.txt``). Each panel overlays GHI, BNI, and DHI. 
+Draws a 1:1 line; axis limits match across panels for comparability.
 
-Pooled statistics (GHI + BNI/DNI + DHI, all rows): **MBE** = mean(model − measured)
+Pooled statistics (GHI + BNI + DHI, all rows): **MBE** = mean(model − measured)
 [W m⁻²], **RMSE%** = RMSE / mean(measured) × 100, **R²** = 1 − Σ(y−x)² / Σ(x−x̄)² with
 x = measured, y = forward.
 
@@ -52,6 +52,13 @@ need = [
 for c in need:
     if c not in df.columns:
         raise SystemExit(f"Missing column {c!r} in {INPUT_TXT}")
+
+# Right panel: training retrieval vs TabPFN evaluation use the same flux column names.
+_right_title = (
+    "TabPFN forward vs measured"
+    if "beta_pred" in df.columns and "beta_retrieved" not in df.columns
+    else "LS forward vs measured"
+)
 
 sub = df.dropna(subset=need).copy()
 if len(sub) == 0:
@@ -104,7 +111,7 @@ fig, axes = plt.subplots(1, 2, figsize=(11, 5.4), layout="constrained")
 
 for ax, pairs, title in (
     (axes[0], pairs_merra, "MERRA-2 forward vs measured"),
-    (axes[1], pairs_ls, "LS forward vs measured"),
+    (axes[1], pairs_ls, _right_title),
 ):
     for xcol, ycol, label in pairs:
         x = sub[xcol].to_numpy(dtype=float)

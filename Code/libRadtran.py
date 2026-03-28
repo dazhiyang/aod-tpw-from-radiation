@@ -372,7 +372,7 @@ def calculate_residuals_oe(
     config: ClearskyConfig, alpha_m: float, o3_du_m: float,
 ) -> np.ndarray:
     """
-    Calculates residuals between simulated and measured GHI, DNI, and DHI.
+    Calculates residuals between simulated and measured GHI, BNI, and DHI.
 
     Parameters:
     ------------
@@ -392,7 +392,7 @@ def calculate_residuals_oe(
     Returns:
     ------------
     residuals : np.ndarray
-        Array of (sim - meas) for GHI, DNI, DHI.
+        Array of (sim - meas) for GHI, BNI, DHI.
     """
     beta, h2o_mm = float(x[0]), float(x[1])
     sim = run_clearsky(
@@ -513,7 +513,7 @@ def process_row_ls(row: pd.Series, libradtran_dir: str, config: ClearskyConfig) 
         bni_o = float(oe_sim["bni_sim"]) if pd.notna(oe_sim["bni_sim"]) else np.nan
         dhi_o = float(oe_sim["dhi_sim"]) if pd.notna(oe_sim["dhi_sim"]) else np.nan
     else:
-        ghi_o = dni_o = dhi_o = np.nan
+        ghi_o = bni_o = dhi_o = np.nan
 
     return pd.Series({
         "ghi_merra": ghi_m, "bni_merra": bni_m, "dhi_merra": dhi_m,

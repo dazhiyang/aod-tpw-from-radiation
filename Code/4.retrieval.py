@@ -45,8 +45,11 @@ if _tqdm is not None:
 else:
     results = df.apply(_ls_fn, axis=1)
 
-# Collect results
-out = pd.concat([df, results], axis=1)
+# Drop input columns that are recomputed in process_row_ls (LHS copies of fluxes and
+# repeated MERRA scalars) so we do not duplicate column names after concat.
+_overlap = [c for c in results.columns if c in df.columns]
+df_base = df.drop(columns=_overlap, errors="ignore")
+out = pd.concat([df_base, results], axis=1)
 
 cols = [
     "ghi", "bni", "dhi", "ghi_merra", "bni_merra", "dhi_merra",
