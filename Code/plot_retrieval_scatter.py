@@ -43,17 +43,17 @@ from plotnine import (
 from plotnine.themes.elements.margin import margin
 
 PROJECT = Path(__file__).resolve().parent.parent
-INPUT_0_5K = Path(
+INPUT_LS = Path(
     os.environ.get(
-        "PLOT_INPUT_0_5K",
+        "PLOT_INPUT_LS",
         os.environ.get("PLOT_INPUT", str(PROJECT / "Data" / "test_ls_0.5k.txt")),
     ),
 )
-INPUT_2K = Path(os.environ.get("PLOT_INPUT_2K", str(PROJECT / "Data" / "test_ls_2k.txt")))
+INPUT_OE = Path(os.environ.get("PLOT_INPUT_OE", str(PROJECT / "Data" / "test_oe_0.5k.txt")))
 OUTPUT_PNG = Path(
     os.environ.get(
         "PLOT_OUTPUT",
-        str(PROJECT / "tex" / "figures" / "retrieval_scatter_merra_ls.png"),
+        str(PROJECT / "tex" / "figures" / "retrieval_scatter_ls_oe.png"),
     )
 )
 
@@ -62,16 +62,12 @@ FIG_H_MM = float(os.environ.get("PLOT_HEIGHT_MM", "70"))
 
 WONG_GHI_BNI_DHI = ("#E69F00", "#56B4E9", "#009E73")
 
-need = [
-    "ghi",
-    "bni",
-    "dhi",
-    "ghi_merra",
-    "bni_merra",
-    "dhi_merra",
-    "ghi_ls",
-    "bni_ls",
-    "dhi_ls",
+need_ls = [
+    "ghi", "bni", "dhi", "ghi_merra", "bni_merra", "dhi_merra",
+    "ghi_ls", "bni_ls", "dhi_ls",
+]
+need_oe = [
+    "ghi", "bni", "dhi", "ghi_oe", "bni_oe", "dhi_oe",
 ]
 
 PANEL_MERRA = "MERRA-2"
@@ -79,14 +75,14 @@ PANEL_05 = "TabPFN 0.5k trained"
 PANEL_2K = "TabPFN 2k trained"
 
 
-def _load_sub(path: Path) -> pd.DataFrame | None:
+def _load_sub(path: Path, columns: list[str]) -> pd.DataFrame | None:
     if not path.is_file():
         return None
     df = pd.read_csv(path, sep="\t", comment="#", parse_dates=["time_utc"])
-    for c in need:
+    for c in columns:
         if c not in df.columns:
             raise SystemExit(f"Missing column {c!r} in {path}")
-    sub = df.dropna(subset=need).copy()
+    sub = df.dropna(subset=columns).copy()
     if len(sub) == 0:
         return None
     return sub
@@ -132,26 +128,31 @@ def mbe_rmsepct_r2(x_meas: np.ndarray, y_fwd: np.ndarray) -> tuple[float, float,
     return mbe, rmse_pct, r2
 
 
-sub_05 = _load_sub(INPUT_0_5K)
-sub_2k = _load_sub(INPUT_2K)
+sub_ls = _load_sub(INPUT_LS, need_ls)
+sub_oe = _load_sub(INPUT_OE, need_oe)
 
-if sub_05 is None:
-    raise SystemExit(f"Missing 0.5k table: {INPUT_0_5K}")
+if sub_ls is None:
+    raise SystemExit(f"Missing LS table: {INPUT_LS}")
+if sub_oe is None:
+    raise SystemExit(f"Missing OE table: {INPUT_OE}")
 
-# Verify parity if both exist
-if sub_2k is not None:
-    if not sub_05["time_utc"].equals(sub_2k["time_utc"]):
-        print("WARNING: time_utc differs between 0.5k and 2k. Filtering to intersection...")
-        common = sub_05.index.intersection(sub_2k.index)
-        sub_05 = sub_05.loc[common]
-        sub_2k = sub_2k.loc[common]
+# Verify parity
+if not sub_ls["time_utc"].equals(sub_oe["time_utc"]):
+    print("WARNING: time_utc differs between LS and OE. Filtering to intersection...")
+    common = sub_ls["time_utc"].reset_index().merge(sub_oe["time_utc"].reset_index(), on="time_utc")["time_utc"]
+    sub_ls = sub_ls[sub_ls["time_utc"].isin(common)].copy()
+    sub_oe = sub_oe[sub_oe["time_utc"].isin(common)].copy()
 
-    base_meas_merra = ["ghi", "bni", "dhi", "ghi_merra", "bni_merra", "dhi_merra"]
-    for c in base_meas_merra:
-        a = sub_05[c].to_numpy(dtype=float)
-        b = sub_2k[c].to_numpy(dtype=float)
-        if not np.allclose(a, b, rtol=0, atol=1e-5, equal_nan=True):
-             print(f"WARNING: Column {c!r} differs between inputs.")
+base_meas = ["ghi", "bni", "dhi"]
+for c in base_meas:
+    a = sub_ls[c].to_numpy(dtype=float)
+    b = sub_oe[c].to_numpy(dtype=float)
+    if not np.allclose(a, b, rtol=0, atol=1e-5, equal_nan=True):
+         print(f"WARNING: Measured {c!r} differs between inputs.")
+
+PANEL_MERRA = "MERRA-2"
+PANEL_LS = "TabPFN (LS)"
+PANEL_OE = "TabPFN (OE)"
 
 pairs_merra = (
     ("ghi", "ghi_merra", "GHI"),
@@ -163,19 +164,21 @@ pairs_ls = (
     ("bni", "bni_ls", "BNI"),
     ("dhi", "dhi_ls", "DHI"),
 )
+pairs_oe = (
+    ("ghi", "ghi_oe", "GHI"),
+    ("bni", "bni_oe", "BNI"),
+    ("dhi", "dhi_oe", "DHI"),
+)
 
 panels_to_plot = []
-panels_to_plot.append(_long_overlay(pairs_merra, sub_05, PANEL_MERRA))
-panels_to_plot.append(_long_overlay(pairs_ls, sub_05, PANEL_05))
-if sub_2k is not None:
-    panels_to_plot.append(_long_overlay(pairs_ls, sub_2k, PANEL_2K))
+panels_to_plot.append(_long_overlay(pairs_merra, sub_ls, PANEL_MERRA))
+panels_to_plot.append(_long_overlay(pairs_ls, sub_ls, PANEL_LS))
+panels_to_plot.append(_long_overlay(pairs_oe, sub_oe, PANEL_OE))
 
 long_df = pd.concat(panels_to_plot, ignore_index=True)
 
 _comp_cat = pd.CategoricalDtype(categories=["GHI", "BNI", "DHI"], ordered=True)
-_panel_cat_list = [PANEL_MERRA, PANEL_05]
-if sub_2k is not None:
-    _panel_cat_list.append(PANEL_2K)
+_panel_cat_list = [PANEL_MERRA, PANEL_LS, PANEL_OE]
 _panel_cat = pd.CategoricalDtype(categories=_panel_cat_list, ordered=True)
 
 long_df["component"] = long_df["component"].astype(_comp_cat)
@@ -195,11 +198,10 @@ line_df = pd.concat(
 line_df["panel"] = line_df["panel"].astype(_panel_cat)
 
 stat_runs = [
-    (PANEL_MERRA, sub_05, pairs_merra),
-    (PANEL_05, sub_05, pairs_ls),
+    (PANEL_MERRA, sub_ls, pairs_merra),
+    (PANEL_LS, sub_ls, pairs_ls),
+    (PANEL_OE, sub_oe, pairs_oe),
 ]
-if sub_2k is not None:
-    stat_runs.append((PANEL_2K, sub_2k, pairs_ls))
 
 stat_rows: list[dict[str, str | float]] = []
 for panel_name, frame, pairs in stat_runs:

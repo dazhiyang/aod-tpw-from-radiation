@@ -60,9 +60,9 @@ CLEARSKY_CONFIG = DEFAULT_CLEARSKY_CONFIG
 
 # LS Parameters
 BETA_MIN = 1e-6
-BETA_MAX = 2.0
+BETA_MAX = 1.1 # Chris' REST2 paper
 W_MIN = 0.05
-W_MAX = 80.0
+W_MAX = 100.0 # Chris' REST2 paper
 DIFF_STEP_BETA = 0.002
 DIFF_STEP_W = 0.05
 MAX_NFEV = 40
@@ -438,8 +438,13 @@ def retrieve_one_row_ls(
 
     try:
         result = least_squares(
-            calculate_residuals_ls, x0, args=(row, libradtran_dir, config, alpha_m, o3_du_m),
-            bounds=bounds, jac=JAC_MODE, diff_step=diff_step, max_nfev=MAX_NFEV,
+            calculate_residuals_ls, 
+            x0, 
+            args=(row, libradtran_dir, config, alpha_m, o3_du_m),
+            bounds=bounds, 
+            jac=JAC_MODE, 
+            diff_step=diff_step, 
+            max_nfev=MAX_NFEV,
         )
     except Exception as e:
         print(f"LS failed at {row.name}: {e}")
@@ -529,6 +534,11 @@ def calculate_residuals_oe(
 ) -> np.ndarray:
     """
     Calculates the OE weighted residuals for both measurements and priors.
+
+    Uses only BNI and DHI as the measurement vector (not GHI) because
+    GHI ≈ BNI·cos(SZA) + DHI — including all three with a diagonal S_ε
+    would over-count measurement information and implicitly down-weight
+    the prior constraint.
     """
     beta, w = float(x[0]), float(x[1])
     
@@ -538,13 +548,13 @@ def calculate_residuals_oe(
         angstrom_beta=beta, w=w, quiet=True,
     )
     
-    # 2. Extract Data
-    y_meas = np.array([float(row["ghi"]), float(row["bni"]), float(row["dhi"])], dtype=float)
-    y_sim = np.array([float(sim["ghi_sim"]), float(sim["bni_sim"]), float(sim["dhi_sim"])], dtype=float)
+    # 2. Extract Data (BNI + DHI only; GHI omitted to avoid redundancy)
+    y_meas = np.array([float(row["bni"]), float(row["dhi"])], dtype=float)
+    y_sim = np.array([float(sim["bni_sim"]), float(sim["dhi_sim"])], dtype=float)
     
-    # Handle failure: Return a massive penalty array matching the expected length (3 meas + 2 prior = 5)
+    # Handle failure: penalty length = 2 meas + 2 prior = 4
     if not np.isfinite(y_sim).all() or not np.isfinite(y_meas).all():
-        return np.full(5, FAILURE_PENALTY, dtype=float)
+        return np.full(4, FAILURE_PENALTY, dtype=float)
         
     # 3. Calculate Weighted Measurement Residuals
     res_y = (y_sim - y_meas) / y_err
@@ -567,30 +577,30 @@ def retrieve_one_row_oe(
     # --- The Optimal Estimation Setup ---
     x_prior = np.array([beta0, w0], dtype=float)
     
-    # 1. Dynamic Measurement Uncertainties (y_err)
-    ghi_meas = float(row["ghi"])
+    # 1. Dynamic Measurement Uncertainties (y_err) — BNI + DHI only
     bni_meas = float(row["bni"])
     dhi_meas = float(row["dhi"])
     
-    # Use max(percentage, absolute_floor) to protect against zero-offsets at twilight
-    # GHI: ~2% error, minimum floor of 5.0 W/m^2
-    ghi_err = max(0.02 * ghi_meas, 5.0)
-    
+    # Use max(percentage, absolute_floor) to protect against zero-offsets at twilight.
+    # abs() guards against negative readings from instrument offsets.
     # BNI: ~1% error (pyrheliometers are highly accurate), minimum floor of 2.0 W/m^2
-    bni_err = max(0.01 * bni_meas, 2.0)
+    bni_err = max(0.01 * abs(bni_meas), 2.0)
     
     # DHI: ~3% error (shaded pyranometers have slightly higher relative uncertainty), floor of 5.0 W/m^2
-    dhi_err = max(0.03 * dhi_meas, 5.0)
+    dhi_err = max(0.03 * abs(dhi_meas), 5.0)
     
-    y_err = np.array([ghi_err, bni_err, dhi_err], dtype=float) 
+    y_err = np.array([bni_err, dhi_err], dtype=float) 
     
     # 2. Dynamic Prior Uncertainties (x_err / S_a)
-    # Water Vapor: MERRA-2 is robust. Assign ~15% relative uncertainty, minimum floor of 2.0 mm.
-    w_err = max(0.15 * w0, 2.0)
+    # Realistic MERRA-2 uncertainties — loose enough for the retrieval to
+    # meaningfully depart from the prior when the measurements demand it,
+    # but tight enough to regularise under-determined conditions.
+    #
+    # Water Vapor: ~15% relative uncertainty (MERRA-2 vs GPS/radiosonde), min floor 1.0 mm.
+    w_err = max(0.15 * w0, 1.0)
     
-    # Aerosol Turbidity: MERRA-2 is a bulk grid average. Local station conditions vary wildly.
-    # Assign ~50% relative uncertainty to allow BSRN data to pull the state, minimum floor of 0.1.
-    beta_err = max(0.50 * beta0, 0.1)
+    # Aerosol Turbidity: ~30% relative uncertainty (MERRA-2 vs AERONET), min floor 0.01.
+    beta_err = max(0.30 * beta0, 0.01)
     
     x_err = np.array([beta_err, w_err], dtype=float) 
     
