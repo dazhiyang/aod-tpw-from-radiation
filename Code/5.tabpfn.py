@@ -1,5 +1,10 @@
 """
 5.tabpfn: Trains and runs the TabPFN machine-learning model for AOD/TPW retrieval.
+
+We always compute ``ghi_trans``, ``bni_trans``, ``dhi_trans`` (measured / REST2 clear-sky) so they
+are present in memory and written to ``pred_*.txt``; TabPFN currently uses ``FEATURES`` below
+(measured flux + zenith + MERRA). To switch back to transmittance-only inputs, set
+``FEATURES = [*_TRANS, "zenith", ...]`` (and optionally drop ``*_MEAS`` from that list).
 """
 
 from __future__ import annotations
@@ -28,12 +33,28 @@ TRAIN_IN = PROJECT / "Data" / f"train_{MODE}{K_SUFFIX}.txt"
 TEST_POOL = PROJECT / "Data" / "testpool.txt"
 PRED_OUT = PROJECT / "Data" / f"pred_{MODE}{K_SUFFIX}.txt"
 
+_CLEAR = ("ghi_clear", "bni_clear", "dhi_clear")
+_TRANS = ("ghi_trans", "bni_trans", "dhi_trans")
+_MEAS = ("ghi", "bni", "dhi")
+
+# TabPFN input columns (change to ``*_TRANS`` instead of ``*_MEAS`` to use transmittance as features).
 FEATURES = [
-    "ghi", "bni", "dhi", "zenith",
+    *_MEAS,
+    "zenith",
     "merra_ALPHA", "merra_ALBEDO", "merra_TQV",
     "merra_TO3", "merra_PS",
 ]
 TARGETS = [f"beta_{MODE}", f"w_{MODE}"]
+
+
+def _add_transmittance(df: pd.DataFrame) -> pd.DataFrame:
+    """Transmittance proxy: measured / REST2 clear-sky (e.g. ``ghi_trans`` = ghi/ghi_clear). Zenith ≤ 87°; no epsilon on the denominator."""
+    out = df.copy()
+    out["ghi_trans"] = out["ghi"] / out["ghi_clear"]
+    out["bni_trans"] = out["bni"] / out["bni_clear"]
+    out["dhi_trans"] = out["dhi"] / out["dhi_clear"]
+    return out
+
 
 # --- Execution Logic ---
 if not TRAIN_IN.is_file():
@@ -42,9 +63,21 @@ if not TRAIN_IN.is_file():
 
 print(f"Loading training data: {TRAIN_IN.name}")
 train_df = pd.read_csv(TRAIN_IN, sep="\t")
+for c in _CLEAR:
+    if c not in train_df.columns:
+        print(f"ERROR: Missing column {c!r} in {TRAIN_IN}", file=sys.stderr)
+        sys.exit(1)
+train_df = _add_transmittance(train_df)
 
 print(f"Loading test pool: {TEST_POOL.name}")
 test_df = pd.read_csv(TEST_POOL, sep="\t", comment="#")
+for c in _CLEAR:
+    if c not in test_df.columns:
+        print(f"ERROR: Missing column {c!r} in {TEST_POOL}", file=sys.stderr)
+        sys.exit(1)
+test_df = _add_transmittance(test_df)
+train_df = train_df.replace([np.inf, -np.inf], np.nan)
+test_df = test_df.replace([np.inf, -np.inf], np.nan)
 
 # Sample for standardized evaluation (configurable via N_TEST)
 if len(test_df) > N_TEST:

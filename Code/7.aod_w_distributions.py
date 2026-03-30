@@ -68,8 +68,8 @@ _PT = 8
 _LW = 0.3
 _DENSITY_LW = float(os.environ.get("DENSITY_LINE_WIDTH", "0.12"))
 
-TEST_LS = Path(os.environ.get("TEST_LS", str(PROJECT / "Data" / "pred_ls_0.5k.txt")))
-TEST_OE = Path(os.environ.get("TEST_OE", str(PROJECT / "Data" / "pred_oe_0.5k.txt")))
+TEST_LS = Path(os.environ.get("TEST_LS", str(PROJECT / "Data" / "pred_ls_2k.txt")))
+TEST_OE = Path(os.environ.get("TEST_OE", str(PROJECT / "Data" / "pred_oe_2k.txt")))
 OUTPUT_PNG = Path(
     os.environ.get(
         "OUTPUT_PNG",

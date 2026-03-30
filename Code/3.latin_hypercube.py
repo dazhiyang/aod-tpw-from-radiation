@@ -28,8 +28,9 @@ TRAIN_TXT = Path(os.environ.get("LHS_TRAIN", str(PROJECT / "Data" / f"train{k_su
 SEED = int(os.environ.get("LHS_SEED", "42"))
 ZENITH_MAX = float(os.environ.get("LHS_ZENITH_MAX", "87"))
 
+# LHS stratification dimensions (measured irradiance, not REST2 clear-sky).
 FEATURES = [
-    "ghi_clear", "bni_clear", "dhi_clear",
+    "ghi", "bni", "dhi",
     "zenith",
     "merra_ALPHA", "merra_ALBEDO", "merra_TQV",
     "merra_TO3", "merra_PS", "merra_BETA",
@@ -54,7 +55,7 @@ clear = pd.Series(True, index=df.index) # Already pre-filtered by 2.create_holdo
 
 pool_all = df.loc[day & clear].dropna(subset=FEATURES)
 pool = pool_all[FEATURES]
-print(f"Pool: {len(pool)} clear-sky daytime rows")
+print(f"Pool: {len(pool)} clear-sky daytime rows (LHS uses measured flux + MERRA + zenith)")
 
 # Latin Hypercube Sampling (Over-sample to guarantee uniqueness)
 print(f"Generating {LHS_N*2} LHS candidates to ensure {LHS_N} unique physical rows...")

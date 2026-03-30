@@ -59,10 +59,13 @@ BEIJING_DATE = "2024-11-23"
 _PT = 8
 _LW = 0.3
 
+_CLEAR = ("ghi_clear", "bni_clear", "dhi_clear")
+_TRANS = ("ghi_trans", "bni_trans", "dhi_trans")
+_MEAS = ("ghi", "bni", "dhi")
+
+# Same TabPFN inputs as ``5.tabpfn``. ``*_trans`` are computed below (not in ``FEATURES`` unless you switch ``5``).
 FEATURES = [
-    "ghi",
-    "bni",
-    "dhi",
+    *_MEAS,
     "zenith",
     "merra_ALPHA",
     "merra_ALBEDO",
@@ -71,7 +74,28 @@ FEATURES = [
     "merra_PS",
 ]
 
+_QIQ_USECOLS = list(_MEAS) + list(_CLEAR) + [
+    "zenith",
+    "merra_ALPHA",
+    "merra_ALBEDO",
+    "merra_TQV",
+    "merra_TO3",
+    "merra_PS",
+    "time_utc",
+    "clearsky",
+    "merra_BETA",
+]
+
 TZ_BEIJING = ZoneInfo("Asia/Shanghai")
+
+
+def _add_transmittance(df: pd.DataFrame) -> pd.DataFrame:
+    """Measured / REST2 clear-sky; same as ``5.tabpfn._add_transmittance`` (optional future inputs)."""
+    out = df.copy()
+    out["ghi_trans"] = out["ghi"] / out["ghi_clear"]
+    out["bni_trans"] = out["bni"] / out["bni_clear"]
+    out["dhi_trans"] = out["dhi"] / out["dhi_clear"]
+    return out
 
 COLOR_MEAS = "#333333"
 COLOR_MERRA = "#E69F00"
@@ -93,7 +117,7 @@ def _load_qiq_window(
     end_utc: pd.Timestamp,
 ) -> pd.DataFrame:
     """Chunked read; keep rows with ``start_utc <= time_utc < end_utc`` (UTC)."""
-    usecols = FEATURES + ["time_utc", "clearsky", "merra_BETA"]
+    usecols = _QIQ_USECOLS
     chunks: list[pd.DataFrame] = []
     reader = pd.read_csv(
         qiq_path,
@@ -112,7 +136,7 @@ def _load_qiq_window(
         chunk["time_utc"] = tt[m]
         chunks.append(chunk)
     if not chunks:
-        return pd.DataFrame(columns=usecols)
+        return pd.DataFrame(columns=_QIQ_USECOLS)
     out = pd.concat(chunks, ignore_index=True)
     return out.sort_values("time_utc")
 
@@ -219,6 +243,8 @@ def main() -> None:
     day = raw.copy()
     day = day[np.isfinite(day["zenith"].to_numpy(dtype=float))]
     day = day[day["zenith"].to_numpy(dtype=float) < 87.0]
+    day = _add_transmittance(day)
+    day = day.replace([np.inf, -np.inf], np.nan)
     day = day.dropna(subset=FEATURES)
     if day.empty:
         print("ERROR: No daytime rows after QC.", file=sys.stderr)
@@ -236,12 +262,14 @@ def main() -> None:
 
     print(f"Loading: {train_ls.name}")
     df_ls = pd.read_csv(train_ls, sep="\t")
+    df_ls = _add_transmittance(df_ls).replace([np.inf, -np.inf], np.nan)
     beta_ls, w_ls = _tabpfn_fit_predict_clip(
         df_ls, ("beta_ls", "w_ls"), X_day, device, "LS targets",
     )
 
     print(f"Loading: {train_oe.name}")
     df_oe = pd.read_csv(train_oe, sep="\t")
+    df_oe = _add_transmittance(df_oe).replace([np.inf, -np.inf], np.nan)
     beta_oe, w_oe = _tabpfn_fit_predict_clip(
         df_oe, ("beta_oe", "w_oe"), X_day, device, "OE targets",
     )
