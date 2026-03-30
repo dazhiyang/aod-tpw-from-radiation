@@ -16,8 +16,8 @@ KDE uses ``bounds=(0, AOD_X_MAX)`` so the x-axis ends at that cap. The **w** pan
 all merged rows.
 
 Env:
-    TEST_LS — default ``Data/test_ls_0.5k.txt``
-    TEST_OE — default ``Data/test_oe_0.5k.txt``
+    TEST_LS — default ``Data/pred_ls_0.5k.txt``
+    TEST_OE — default ``Data/pred_oe_0.5k.txt``
     OUTPUT_PNG — default ``tex/figures/aod_w_distributions.png``
     ANGSTROM_BETA_REF_UM — β reference wavelength in μm (default **1.0**; use **0.55** if β is
         already τ at 550 nm in your pipeline)
@@ -68,8 +68,8 @@ _PT = 8
 _LW = 0.3
 _DENSITY_LW = float(os.environ.get("DENSITY_LINE_WIDTH", "0.12"))
 
-TEST_LS = Path(os.environ.get("TEST_LS", str(PROJECT / "Data" / "test_ls_0.5k.txt")))
-TEST_OE = Path(os.environ.get("TEST_OE", str(PROJECT / "Data" / "test_oe_0.5k.txt")))
+TEST_LS = Path(os.environ.get("TEST_LS", str(PROJECT / "Data" / "pred_ls_0.5k.txt")))
+TEST_OE = Path(os.environ.get("TEST_OE", str(PROJECT / "Data" / "pred_oe_0.5k.txt")))
 OUTPUT_PNG = Path(
     os.environ.get(
         "OUTPUT_PNG",

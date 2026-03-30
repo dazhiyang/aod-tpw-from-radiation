@@ -30,8 +30,8 @@ PRED_OUT = PROJECT / "Data" / f"pred_{MODE}{K_SUFFIX}.txt"
 
 FEATURES = [
     "ghi", "bni", "dhi", "zenith",
-    "merra_ALPHA", "merra_ALBEDO", "merra_TQV", 
-    "merra_TO3", "merra_PS"
+    "merra_ALPHA", "merra_ALBEDO", "merra_TQV",
+    "merra_TO3", "merra_PS",
 ]
 TARGETS = [f"beta_{MODE}", f"w_{MODE}"]
 

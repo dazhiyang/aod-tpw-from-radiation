@@ -29,9 +29,10 @@ SEED = int(os.environ.get("LHS_SEED", "42"))
 ZENITH_MAX = float(os.environ.get("LHS_ZENITH_MAX", "87"))
 
 FEATURES = [
-    "ghi", "bni", "dhi", "zenith",
-    "merra_ALPHA", "merra_ALBEDO", "merra_TQV", 
-    "merra_TO3", "merra_PS", "merra_BETA"
+    "ghi_clear", "bni_clear", "dhi_clear",
+    "zenith",
+    "merra_ALPHA", "merra_ALBEDO", "merra_TQV",
+    "merra_TO3", "merra_PS", "merra_BETA",
 ]
 
 # --- Execution Logic ---
@@ -51,7 +52,8 @@ for c in FEATURES + ["zenith"]:
 day = df["zenith"].astype(float) <= ZENITH_MAX
 clear = pd.Series(True, index=df.index) # Already pre-filtered by 2.create_holdout.py
 
-pool = df.loc[day & clear, FEATURES].dropna()
+pool_all = df.loc[day & clear].dropna(subset=FEATURES)
+pool = pool_all[FEATURES]
 print(f"Pool: {len(pool)} clear-sky daytime rows")
 
 # Latin Hypercube Sampling (Over-sample to guarantee uniqueness)
@@ -86,12 +88,8 @@ if len(unique_idx) < LHS_N:
 else:
     print(f"Successfully found exactly {LHS_N} unique rows.")
 
-train = pool.iloc[unique_idx].copy()
+train = pool_all.iloc[unique_idx].copy()
 train.index.name = "time_utc"
-pd.options.mode.chained_assignment = None 
-train.loc[:, "ghi_merra"] = train["ghi"]
-train.loc[:, "bni_merra"] = train["bni"]
-train.loc[:, "dhi_merra"] = train["dhi"]
 
 # Save
 TRAIN_TXT.parent.mkdir(parents=True, exist_ok=True)

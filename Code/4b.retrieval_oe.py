@@ -52,7 +52,8 @@ df_base = df.drop(columns=_overlap, errors="ignore")
 out = pd.concat([df_base, results], axis=1)
 
 cols = [
-    "ghi", "bni", "dhi", "ghi_merra", "bni_merra", "dhi_merra",
+    "ghi", "bni", "dhi", "ghi_clear", "bni_clear", "dhi_clear",
+    "ghi_merra", "bni_merra", "dhi_merra",
     "ghi_oe", "bni_oe", "dhi_oe", "beta_oe", "w_oe",
     "merra_ALPHA", "merra_BETA", "merra_TO3", "merra_TQV", "merra_ALBEDO", "merra_PS", "zenith",
 ]

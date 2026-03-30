@@ -22,9 +22,11 @@ FRACTION = 0.30
 SEED = 42
 
 FEATURES = [
-    "ghi", "bni", "dhi", "zenith",
-    "merra_ALPHA", "merra_ALBEDO", "merra_TQV", 
-    "merra_TO3", "merra_PS", "merra_BETA"
+    "ghi", "bni", "dhi",
+    "ghi_clear", "bni_clear", "dhi_clear",
+    "zenith",
+    "merra_ALPHA", "merra_ALBEDO", "merra_TQV",
+    "merra_TO3", "merra_PS", "merra_BETA",
 ]
 
 # --- Execution Logic ---

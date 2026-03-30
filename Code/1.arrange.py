@@ -1,6 +1,7 @@
 """QIQ LR0100 → solpos + QC + MERRA + BrightSun clearsky flag; NaN ghi/bni/dhi if any ``flag*`` == 1.
 
-Output columns (``time_utc`` index + tab-separated): ``ghi``, ``bni``, ``dhi``, ``zenith``,
+Output columns (``time_utc`` index + tab-separated): ``ghi``, ``bni``, ``dhi``,
+``ghi_clear``, ``bni_clear``, ``dhi_clear`` (REST2), ``zenith``,
 ``merra_*`` (ALPHA, ALBEDO, TQV, TO3, PS, BETA), ``clearsky``. Nothing else is written.
 
 **Default:** process **all** ``qiq*.dat.gz`` in ``Data/QIQ/`` (e.g. one year = 12 monthly files).
@@ -42,6 +43,9 @@ OUTPUT_COLUMNS = (
     "ghi",
     "bni",
     "dhi",
+    "ghi_clear",
+    "bni_clear",
+    "dhi_clear",
     "zenith",
     "merra_ALPHA",
     "merra_ALBEDO",
@@ -109,7 +113,7 @@ combined.index.name = "time_utc"
 OUTPUT_TXT.parent.mkdir(parents=True, exist_ok=True)
 with open(OUTPUT_TXT, "w", encoding="ascii") as f:
     f.write(
-        "# QIQ: BSRN + zenith + MERRA_* + clearsky BrightSun (0/1); no lwd/temp/rh/pressure; "
+        "# QIQ: BSRN + REST2 clear-sky + zenith + MERRA_* + clearsky BrightSun (0/1); "
         "SW NaN if QC fail. UTC.\n"
         f"# lat_deg={_meta['lat']:.6f} lon_deg={_meta['lon']:.6f} elev_m={_meta['elev']:.3f}\n"
     )
