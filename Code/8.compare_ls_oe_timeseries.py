@@ -40,9 +40,9 @@ OUTPUT_PNG = Path(
         str(PROJECT / "tex" / "figures" / "compare_ls_oe_timeseries.png"),
     )
 )
-TARGET_DATE = "2024-01-21"
+TARGET_DATE = "2024-09-21"
 UTC_START_HOUR = int(os.environ.get("UTC_START_HOUR", "0"))
-UTC_END_HOUR = int(os.environ.get("UTC_END_HOUR", "8"))
+UTC_END_HOUR = int(os.environ.get("UTC_END_HOUR", "24"))
 
 WONG_ORANGE = "#E69F00"
 WONG_SKY = "#56B4E9"
@@ -136,6 +136,8 @@ def main() -> None:
         "lines.linewidth": _LW,
         "xtick.major.width": _LW,
         "ytick.major.width": _LW,
+        "grid.color": "black",
+        "grid.alpha": 0.35,
         "grid.linewidth": _LW,
     })
 
@@ -182,7 +184,7 @@ def main() -> None:
     
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
     ax.tick_params(axis="both", labelsize=_PT, width=_LW, length=2.5)
-    ax.grid(True, alpha=0.35, linewidth=_LW)
+    ax.grid(True, color="black", alpha=0.35, linewidth=_LW)
     ax.legend(loc="upper left", frameon=False, ncol=2)
 
     OUTPUT_PNG.parent.mkdir(parents=True, exist_ok=True)
