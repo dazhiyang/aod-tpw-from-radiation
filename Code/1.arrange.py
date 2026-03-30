@@ -1,6 +1,7 @@
-"""QIQ LR0100 → solpos + QC + MERRA + Reno clearsky flag; NaN ghi/bni/dhi if any ``flag*`` == 1.
+"""QIQ LR0100 → solpos + QC + MERRA + BrightSun clearsky flag; NaN ghi/bni/dhi if any ``flag*`` == 1.
 
-Drops from output: ``lwd``, ``temp``, ``rh``, ``pressure``, solpos extras, and all ``flag*``.
+Output columns (``time_utc`` index + tab-separated): ``ghi``, ``bni``, ``dhi``, ``zenith``,
+``merra_*`` (ALPHA, ALBEDO, TQV, TO3, PS, BETA), ``clearsky``. Nothing else is written.
 
 **Default:** process **all** ``qiq*.dat.gz`` in ``Data/QIQ/`` (e.g. one year = 12 monthly files).
 
@@ -37,15 +38,18 @@ if not paths:
 
 print(f"Processing {len(paths)} monthly file(s)")
 
-DROP_AFTER = (
-    "lwd",
-    "temp",
-    "rh",
-    "pressure",
-    "apparent_zenith",
-    "azimuth",
-    "bni_extra",
-    "ghi_extra",
+OUTPUT_COLUMNS = (
+    "ghi",
+    "bni",
+    "dhi",
+    "zenith",
+    "merra_ALPHA",
+    "merra_ALBEDO",
+    "merra_TQV",
+    "merra_TO3",
+    "merra_PS",
+    "merra_BETA",
+    "clearsky",
 )
 _meta = bsrn.constants.BSRN_STATIONS[STATION]
 
@@ -70,20 +74,23 @@ for path in paths:
     merra = bsrn.io.merra2.fetch_rest2(df.index, STATION)
     merged = df.join(merra.add_prefix("merra_"), how="left")
 
-    ghi_clear, _, _ = bsrn.modeling.clear_sky.rest2_model(
-        merged.index,
-        merged["zenith"].to_numpy(dtype=float),
-        merra,
+    merged = bsrn.modeling.clear_sky.add_clearsky_columns(
+        merged, station_code=STATION, model="rest2"
     )
-    reno = bsrn.utils.reno_csd(
+
+    csd = bsrn.utils.brightsun_csd(
+        merged["zenith"].to_numpy(dtype=float),
         merged["ghi"].to_numpy(dtype=float),
-        ghi_clear,
+        merged["ghi_clear"].to_numpy(dtype=float),
+        merged["dhi"].to_numpy(dtype=float),
+        merged["dhi_clear"].to_numpy(dtype=float),
         times=merged.index,
         return_diagnostics=False,
     )
-    # Clear-sky flag: 1 = Reno clear, 0 = not (missing -> 0)
+
+    # Clear-sky flag: 1 = BrightSun clear, 0 = not (missing -> 0)
     merged["clearsky"] = (
-        pd.Series(reno["is_clearsky"], index=merged.index).fillna(False).astype(bool).astype(int)
+        pd.Series(csd["is_clearsky"], index=merged.index).fillna(False).astype(bool).astype(int)
     )
 
     flags = [c for c in merged.columns if c.startswith("flag")]
@@ -91,8 +98,7 @@ for path in paths:
         bad = (merged[flags] == 1).any(axis=1)
         merged.loc[bad, ["ghi", "bni", "dhi"]] = np.nan
 
-    drop = [c for c in merged.columns if c.startswith("flag")] + list(DROP_AFTER)
-    chunks.append(merged.drop(columns=drop, errors="ignore"))
+    chunks.append(merged.loc[:, OUTPUT_COLUMNS])
 
 if not chunks:
     raise SystemExit("No data (empty or missing LR0100).")
@@ -103,7 +109,8 @@ combined.index.name = "time_utc"
 OUTPUT_TXT.parent.mkdir(parents=True, exist_ok=True)
 with open(OUTPUT_TXT, "w", encoding="ascii") as f:
     f.write(
-        "# QIQ: BSRN + zenith + MERRA_* + clearsky (0/1); no lwd/temp/rh/pressure; SW NaN if QC fail. UTC.\n"
+        "# QIQ: BSRN + zenith + MERRA_* + clearsky BrightSun (0/1); no lwd/temp/rh/pressure; "
+        "SW NaN if QC fail. UTC.\n"
         f"# lat_deg={_meta['lat']:.6f} lon_deg={_meta['lon']:.6f} elev_m={_meta['elev']:.3f}\n"
     )
 combined.to_csv(OUTPUT_TXT, mode="a", sep="\t", float_format=_fmt_csv_float, na_rep="")
