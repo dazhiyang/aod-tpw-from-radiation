@@ -7,10 +7,11 @@ source. MERRA-2 and LS fluxes come from ``6.evaluation.py`` outputs; the 0.5k an
 
 Pooled statistics (GHI + BNI + DHI, all rows) per panel: MBE [W m⁻²], RMSE%, R².
 
-Env: ``PLOT_INPUT_0_5K`` (default ``Data/test_ls_0.5k.txt``), ``PLOT_INPUT_2K`` (default
-``Data/test_ls_2k.txt``). If ``PLOT_INPUT`` is set and ``PLOT_INPUT_0_5K`` is not, ``PLOT_INPUT``
-is used as the 0.5k path. ``PLOT_OUTPUT``, ``PLOT_WIDTH_MM`` (default **160**), ``PLOT_HEIGHT_MM``
-(default **56**), ``PLOT_SHOW``, ``PLOT_OPEN``.
+Env: ``K_SUFFIX`` (default ``_0.5k``), ``PLOT_INPUT_LS`` (default ``Data/test_ls{K_SUFFIX}.txt``),
+``PLOT_INPUT_OE`` (default ``Data/test_oe{K_SUFFIX}.txt``). Back-compat: if ``PLOT_INPUT`` is set
+and ``PLOT_INPUT_LS`` is not, ``PLOT_INPUT`` is used as LS input. Also ``PLOT_OUTPUT``,
+``PLOT_WIDTH_MM`` (default **160**), ``PLOT_HEIGHT_MM`` (default **56**), ``PLOT_SHOW``,
+``PLOT_OPEN``.
 
 Requires: pandas, numpy, plotnine, matplotlib.
 """
@@ -43,13 +44,14 @@ from plotnine import (
 from plotnine.themes.elements.margin import margin
 
 PROJECT = Path(__file__).resolve().parent.parent
+K_SUFFIX = os.environ.get("K_SUFFIX", "_0.5k")
 INPUT_LS = Path(
     os.environ.get(
         "PLOT_INPUT_LS",
-        os.environ.get("PLOT_INPUT", str(PROJECT / "Data" / "test_ls_0.5k.txt")),
+        os.environ.get("PLOT_INPUT", str(PROJECT / "Data" / f"test_ls{K_SUFFIX}.txt")),
     ),
 )
-INPUT_OE = Path(os.environ.get("PLOT_INPUT_OE", str(PROJECT / "Data" / "test_oe_0.5k.txt")))
+INPUT_OE = Path(os.environ.get("PLOT_INPUT_OE", str(PROJECT / "Data" / f"test_oe{K_SUFFIX}.txt")))
 OUTPUT_PNG = Path(
     os.environ.get(
         "PLOT_OUTPUT",

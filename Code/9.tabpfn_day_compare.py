@@ -55,6 +55,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 
 # Beijing calendar day to process (Asia/Shanghai). Override: ``BEIJING_DATE`` env or ``argv[1]``.
 BEIJING_DATE = "2024-11-23"
+K_SUFFIX = os.environ.get("K_SUFFIX", "_0.5k")
 
 _PT = 8
 _LW = 0.3
@@ -208,12 +209,11 @@ def main() -> None:
         print("ERROR: Set BEIJING_DATE in this file, or env, or pass YYYY-MM-DD as argv.", file=sys.stderr)
         sys.exit(1)
 
-    k_suffix = os.environ.get("K_SUFFIX", "_0.5k")
     train_ls = Path(
-        os.environ.get("TRAIN_LS", str(PROJECT / "Data" / f"train_ls{k_suffix}.txt"))
+        os.environ.get("TRAIN_LS", str(PROJECT / "Data" / f"train_ls{K_SUFFIX}.txt"))
     )
     train_oe = Path(
-        os.environ.get("TRAIN_OE", str(PROJECT / "Data" / f"train_oe{k_suffix}.txt"))
+        os.environ.get("TRAIN_OE", str(PROJECT / "Data" / f"train_oe{K_SUFFIX}.txt"))
     )
     qiq_master = Path(os.environ.get("QIQ_MASTER", str(PROJECT / "Data" / "qiq_1min_merra_qc.txt")))
     out_png = Path(
