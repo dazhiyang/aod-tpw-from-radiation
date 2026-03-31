@@ -11,10 +11,10 @@ env/
 # Exclude tex
 tex/
 
-# Data: Ignore all except the standardized pools
+# Data: ignore bulk outputs; version station holdout pools only
 Data/*
-!Data/testpool.txt
-!Data/trainpool.txt
+!Data/*_trainpool.txt
+!Data/*_testpool.txt
 
 # Transient files
 randomseed
