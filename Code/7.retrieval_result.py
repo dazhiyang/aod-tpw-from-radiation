@@ -1,4 +1,4 @@
-r"""Temporary diagnostic: densities of AOD₅₅₀ and α, then scatter vs AERONET.
+r"""7.retrieval_result: densities of AOD₅₅₀ and α, then scatter vs AERONET.
 
 **Default (retrieval):** merges LHS sample + ``train_ls`` + ``train_oe`` from steps 3–4.
 
@@ -12,8 +12,12 @@ Row 2: AOD₅₅₀ scatter (AERONET x vs model y) for MERRA, LS, OE (three pane
 Row 3: Ångström α scatter for MERRA, LS, OE (three panels).
 
 Usage:
-    /opt/anaconda3/bin/python Code/tmp_aod_alpha_dist.py
-    USE_TABPFN=1 /opt/anaconda3/bin/python Code/tmp_aod_alpha_dist.py
+    /opt/anaconda3/bin/python Code/7.retrieval_result.py
+    USE_TABPFN=1 /opt/anaconda3/bin/python Code/7.retrieval_result.py
+
+**Figure output:** defaults to **PDF** (three **vector** pages: densities, AOD scatters, α scatters)
+via ``plotnine`` ``draw()`` + ``PdfPages`` — zoom stays sharp. ``.png`` uses a single **raster**
+composite (not lossless zoom). Override path with ``OUTPUT_FIG`` / ``OUTPUT_PNG``.
 """
 
 from __future__ import annotations
@@ -113,15 +117,13 @@ PRED_OE = Path(
     os.environ.get("PRED_OE", str(PROJECT / "Data" / f"{STATION}_{YEAR}_pred_oe{_k_suffix}.txt"))
 )
 _DEFAULT_FIG = (
-    "tmp_aod_alpha_distributions_tabpfn.png"
+    "retrieval_result_distributions_tabpfn.pdf"
     if USE_TABPFN
-    else "tmp_aod_alpha_distributions.png"
+    else "retrieval_result_distributions.pdf"
 )
-OUTPUT_PNG = Path(
-    os.environ.get(
-        "OUTPUT_PNG",
-        str(PROJECT / "tex" / "figures" / _DEFAULT_FIG),
-    )
+_default_fig_path = PROJECT / "tex" / "figures" / _DEFAULT_FIG
+OUTPUT_FIG = Path(
+    os.environ.get("OUTPUT_FIG", os.environ.get("OUTPUT_PNG", str(_default_fig_path)))
 )
 
 
@@ -479,62 +481,97 @@ def main() -> None:
         + _scatter_theme
     )
 
-    # --- Composite: row1 distributions, row2 AOD scatter, row3 α scatter ---
-    def _save_gg(p: ggplot, h_mm: float) -> np.ndarray:
-        buf = io.BytesIO()
-        p.save(
-            buf,
-            format="png",
+    # --- Output: vector PDF (3 pages) or raster composite (PNG / other) ---
+    _fmt = OUTPUT_FIG.suffix.lower().lstrip(".") or "pdf"
+    if _fmt not in ("pdf", "png", "svg", "ps", "eps"):
+        _fmt = "pdf"
+
+    OUTPUT_FIG.parent.mkdir(parents=True, exist_ok=True)
+    w_in = FIG_W_MM / 25.4
+
+    if _fmt == "pdf":
+        from matplotlib.backends.backend_pdf import PdfPages
+
+        with PdfPages(str(OUTPUT_FIG)) as pdf:
+            for p, h_mm in (
+                (p_density, FIG_H_MM),
+                (p_aod_scatter, FIG_H_SCATTER_MM),
+                (p_alpha_scatter, FIG_H_SCATTER_MM),
+            ):
+                h_in = h_mm / 25.4
+                fig = (p + theme(figure_size=(w_in, h_in))).draw()
+                fig.patch.set_facecolor("white")
+                pdf.savefig(
+                    fig,
+                    bbox_inches="tight",
+                    pad_inches=0.02,
+                    facecolor="white",
+                    edgecolor="none",
+                )
+                plt.close(fig)
+        print(f"Wrote: {OUTPUT_FIG}  (3-page vector PDF)")
+    else:
+
+        def _save_gg(p: ggplot, h_mm: float) -> np.ndarray:
+            buf = io.BytesIO()
+            p.save(
+                buf,
+                format="png",
+                dpi=300,
+                width=w_in,
+                height=h_mm / 25.4,
+                units="in",
+                verbose=False,
+                facecolor="white",
+                edgecolor="none",
+            )
+            buf.seek(0)
+            return plt.imread(buf)
+
+        img_d = _save_gg(p_density, FIG_H_MM)
+        img_aod = _save_gg(p_aod_scatter, FIG_H_SCATTER_MM)
+        img_alpha = _save_gg(p_alpha_scatter, FIG_H_SCATTER_MM)
+
+        h_top = FIG_H_MM / 25.4
+        h_mid = FIG_H_SCATTER_MM / 25.4
+        h_bot = FIG_H_SCATTER_MM / 25.4
+        fig = plt.figure(
+            figsize=(w_in, h_top + h_mid + h_bot + FIG_COMPOSITE_PAD_IN),
             dpi=300,
-            width=FIG_W_MM / 25.4,
-            height=h_mm / 25.4,
-            units="in",
-            verbose=False,
+            facecolor="white",
+        )
+        gs = GridSpec(
+            3,
+            1,
+            figure=fig,
+            height_ratios=[FIG_H_MM, FIG_H_SCATTER_MM, FIG_H_SCATTER_MM],
+            hspace=GS_HSPACE,
+        )
+        ax_top = fig.add_subplot(gs[0])
+        ax_top.imshow(img_d, aspect="auto")
+        ax_top.axis("off")
+        ax_mid = fig.add_subplot(gs[1])
+        ax_mid.imshow(img_aod, aspect="auto")
+        ax_mid.axis("off")
+        ax_bot = fig.add_subplot(gs[2])
+        ax_bot.imshow(img_alpha, aspect="auto")
+        ax_bot.axis("off")
+
+        fig.savefig(
+            str(OUTPUT_FIG),
+            format=_fmt,
+            dpi=300,
             facecolor="white",
             edgecolor="none",
+            bbox_inches="tight",
+            pad_inches=0.02,
         )
-        buf.seek(0)
-        return plt.imread(buf)
-
-    img_d = _save_gg(p_density, FIG_H_MM)
-    img_aod = _save_gg(p_aod_scatter, FIG_H_SCATTER_MM)
-    img_alpha = _save_gg(p_alpha_scatter, FIG_H_SCATTER_MM)
-
-    w_in = FIG_W_MM / 25.4
-    h_top = FIG_H_MM / 25.4
-    h_mid = FIG_H_SCATTER_MM / 25.4
-    h_bot = FIG_H_SCATTER_MM / 25.4
-    fig = plt.figure(
-        figsize=(w_in, h_top + h_mid + h_bot + FIG_COMPOSITE_PAD_IN),
-        dpi=300,
-        facecolor="white",
-    )
-    gs = GridSpec(
-        3,
-        1,
-        figure=fig,
-        height_ratios=[FIG_H_MM, FIG_H_SCATTER_MM, FIG_H_SCATTER_MM],
-        hspace=GS_HSPACE,
-    )
-    ax_top = fig.add_subplot(gs[0])
-    ax_top.imshow(img_d, aspect="auto")
-    ax_top.axis("off")
-    ax_mid = fig.add_subplot(gs[1])
-    ax_mid.imshow(img_aod, aspect="auto")
-    ax_mid.axis("off")
-    ax_bot = fig.add_subplot(gs[2])
-    ax_bot.imshow(img_alpha, aspect="auto")
-    ax_bot.axis("off")
-
-    OUTPUT_PNG.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(str(OUTPUT_PNG), dpi=300, facecolor="white", edgecolor="none",
-                bbox_inches="tight", pad_inches=0.02)
-    plt.close(fig)
-    print(f"Wrote: {OUTPUT_PNG}")
+        plt.close(fig)
+        print(f"Wrote: {OUTPUT_FIG}  (single-page raster composite)")
 
     if os.environ.get("PLOT_OPEN", "").strip().lower() in {"1", "true", "yes"}:
         if sys.platform == "darwin":
-            subprocess.run(["open", str(OUTPUT_PNG)], check=False)
+            subprocess.run(["open", str(OUTPUT_FIG)], check=False)
 
 
 if __name__ == "__main__":

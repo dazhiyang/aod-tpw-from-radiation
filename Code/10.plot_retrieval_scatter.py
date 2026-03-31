@@ -1,13 +1,16 @@
 """
-Scatter plots: one row — **MERRA-2**, **TabPFN (LS)**, **TabPFN (OE)**, and optionally **AERONET**
-(``6b`` ``test_aeronet``) when ``PLOT_INPUT_AERONET`` / default ``Data/..._test_aeronet<suffix>.txt``
-is present and non-empty.
+Scatter plots: one row — **MERRA-2**, **TabPFN (LS)**, **TabPFN (OE)**, and optionally **AERONET**.
 
-Each panel overlays **GHI, BNI, DHI** (Wong colors) as measured vs libRadtran forward for that
-source. Inputs are ``6.evaluation.py`` outputs: ``test_ls`` / ``test_oe`` (MERRA + TabPFN forwards).
+If ``PLOT_INPUT_COMBINED`` / default ``Data/..._test_combined<suffix>.txt`` exists (output of combined
+``6.evaluation.py``), that single table is used. Otherwise loads ``test_ls`` + ``test_oe``; optional
+AERONET from ``PLOT_INPUT_AERONET`` / ``..._test_aeronet<suffix>.txt`` when present.
 
-**SKIP_LS** — if ``1`` / ``true``, or if the LS file is **missing**, only **MERRA + OE** (plus
-AERONET if available) are drawn (OE table alone supplies measured + ``*_merra`` + ``*_oe`` columns).
+Each panel overlays **GHI, BNI, DHI** (Wong colors) as measured vs libRadtran forward for that source.
+
+**SKIP_LS** — if ``1`` / ``true``, omit the TabPFN **(LS)** panel. With **separate** ``test_ls`` /
+``test_oe`` files, LS is also skipped when ``test_ls`` is **missing** (non-combined mode only).
+**Combined** ``test_combined*.txt`` includes ``*_ls`` columns; a separate ``test_ls`` file is **not**
+required — set ``SKIP_LS=1`` only if you want MERRA + OE (+ AERONET) without the LS panel.
 
 Pooled statistics (GHI + BNI + DHI, all rows) per panel: MBE [W m⁻²], RMSE%, R².
 
@@ -15,7 +18,8 @@ Env: ``STATION``, ``YEAR``, ``LHS_N`` (defaults **PAL**, **2024**, **500**) set
 ``Data/<STATION>_<YEAR>_test_ls_<suffix>.txt`` and ``..._test_oe_<suffix>.txt`` like step **6**.
 ``SKIP_LS`` — ``1`` to omit TabPFN (LS) panel. ``K_SUFFIX`` / ``PLOT_INPUT_LS`` / ``PLOT_INPUT_OE``.
 Back-compat: if ``PLOT_INPUT`` is set and ``PLOT_INPUT_LS`` is not, ``PLOT_INPUT`` is LS input.
-Also ``PLOT_OUTPUT``, ``PLOT_INPUT_AERONET`` (optional AERONET panel),
+Also ``PLOT_OUTPUT``, ``PLOT_INPUT_COMBINED`` (single table from step **6**),
+``PLOT_INPUT_AERONET`` (optional AERONET panel when not using combined),
 ``PLOT_WIDTH_MM`` (default **160**, width scales with panel count so each facet stays similar size),
 ``PLOT_HEIGHT_MM`` (default **70**), ``PLOT_SHOW``, ``PLOT_OPEN``.
 
@@ -83,6 +87,8 @@ OUTPUT_PNG = Path(
 )
 _DEFAULT_TEST_AERONET = PROJECT / "Data" / f"{STATION}_{YEAR}_test_aeronet{_k_suffix}.txt"
 INPUT_AERONET = Path(os.environ.get("PLOT_INPUT_AERONET", str(_DEFAULT_TEST_AERONET)))
+_DEFAULT_TEST_COMBINED = PROJECT / "Data" / f"{STATION}_{YEAR}_test_combined{_k_suffix}.txt"
+INPUT_COMBINED = Path(os.environ.get("PLOT_INPUT_COMBINED", str(_DEFAULT_TEST_COMBINED)))
 
 FIG_W_MM = float(os.environ.get("PLOT_WIDTH_MM", "160"))
 FIG_H_MM = float(os.environ.get("PLOT_HEIGHT_MM", "70"))
@@ -98,15 +104,20 @@ need_oe = [
     "ghi", "bni", "dhi", "ghi_merra", "bni_merra", "dhi_merra",
     "ghi_oe", "bni_oe", "dhi_oe",
 ]
-# ``6b.evaluation_aeronet.py`` output: MERRA + AERONET forward (``ghi_aeronet``, …).
+# AERONET forward columns (``6.evaluation.py`` combined output includes these).
 need_aeronet = [
     "ghi", "bni", "dhi", "ghi_merra", "bni_merra", "dhi_merra",
     "ghi_aeronet", "bni_aeronet", "dhi_aeronet",
 ]
 
 
+def _skip_ls_explicit_only() -> bool:
+    """True only when ``SKIP_LS`` requests omitting the LS panel (used with combined input)."""
+    return os.environ.get("SKIP_LS", "").strip().lower() in ("1", "true", "yes")
+
+
 def _skip_ls() -> bool:
-    """Explicit ``SKIP_LS=1``, or auto when LS path is not a file."""
+    """Explicit ``SKIP_LS=1``, or auto when LS path is not a file (non-combined inputs)."""
     v = os.environ.get("SKIP_LS", "").strip().lower()
     if v in ("1", "true", "yes"):
         return True
@@ -121,6 +132,16 @@ def _load_sub(path: Path, columns: list[str]) -> pd.DataFrame | None:
     for c in columns:
         if c not in df.columns:
             raise SystemExit(f"Missing column {c!r} in {path}")
+    sub = df.dropna(subset=columns).copy()
+    if len(sub) == 0:
+        return None
+    return sub
+
+
+def _load_sub_from_df(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame | None:
+    for c in columns:
+        if c not in df.columns:
+            return None
     sub = df.dropna(subset=columns).copy()
     if len(sub) == 0:
         return None
@@ -167,39 +188,62 @@ def mbe_rmsepct_r2(x_meas: np.ndarray, y_fwd: np.ndarray) -> tuple[float, float,
     return mbe, rmse_pct, r2
 
 
-skip_ls = _skip_ls()
-sub_oe = _load_sub(INPUT_OE, need_oe)
-if sub_oe is None:
-    raise SystemExit(f"Missing OE table: {INPUT_OE}")
-
-sub_ae = _load_sub(INPUT_AERONET, need_aeronet)
-
 sub_ls: pd.DataFrame | None
-if skip_ls:
-    if not INPUT_LS.is_file():
-        print(f"SKIP_LS: LS file not present ({INPUT_LS.name}); plotting MERRA + OE only.")
-    else:
-        print("SKIP_LS: TabPFN (LS) panel omitted; plotting MERRA + OE only.")
-    sub_ls = None
-else:
-    sub_ls = _load_sub(INPUT_LS, need_ls)
-    if sub_ls is None:
-        raise SystemExit(f"Missing LS table: {INPUT_LS}")
-    # Verify parity
-    if not sub_ls["time_utc"].equals(sub_oe["time_utc"]):
-        print("WARNING: time_utc differs between LS and OE. Filtering to intersection...")
-        common = sub_ls["time_utc"].reset_index().merge(
-            sub_oe["time_utc"].reset_index(), on="time_utc"
-        )["time_utc"]
-        sub_ls = sub_ls[sub_ls["time_utc"].isin(common)].copy()
-        sub_oe = sub_oe[sub_oe["time_utc"].isin(common)].copy()
+sub_oe: pd.DataFrame
+sub_ae: pd.DataFrame | None
+skip_ls: bool
 
-    base_meas = ["ghi", "bni", "dhi"]
-    for c in base_meas:
-        a = sub_ls[c].to_numpy(dtype=float)
-        b = sub_oe[c].to_numpy(dtype=float)
-        if not np.allclose(a, b, rtol=0, atol=1e-5, equal_nan=True):
-            print(f"WARNING: Measured {c!r} differs between inputs.")
+if INPUT_COMBINED.is_file():
+    print(f"Using combined table: {INPUT_COMBINED.name}")
+    df_c = pd.read_csv(INPUT_COMBINED, sep="\t", comment="#", parse_dates=["time_utc"])
+    sub_oe = _load_sub_from_df(df_c, need_oe)
+    if sub_oe is None:
+        raise SystemExit(f"Missing OE columns in {INPUT_COMBINED}")
+    # Combined ``6.evaluation.py`` output already has ``ghi_ls`` …; do not require ``test_ls`` on disk.
+    skip_ls = _skip_ls_explicit_only()
+    if skip_ls:
+        print("SKIP_LS: TabPFN (LS) panel omitted; plotting MERRA + OE only.")
+        sub_ls = None
+    else:
+        sub_ls = _load_sub_from_df(df_c, need_ls)
+        if sub_ls is None:
+            raise SystemExit(
+                f"Missing LS columns or all-NaN rows for LS in {INPUT_COMBINED} "
+                f"(need {need_ls})"
+            )
+    sub_ae = _load_sub_from_df(df_c, need_aeronet)
+else:
+    skip_ls = _skip_ls()
+    sub_oe = _load_sub(INPUT_OE, need_oe)
+    if sub_oe is None:
+        raise SystemExit(f"Missing OE table: {INPUT_OE}")
+
+    sub_ae = _load_sub(INPUT_AERONET, need_aeronet)
+
+    if skip_ls:
+        if not INPUT_LS.is_file():
+            print(f"SKIP_LS: LS file not present ({INPUT_LS.name}); plotting MERRA + OE only.")
+        else:
+            print("SKIP_LS: TabPFN (LS) panel omitted; plotting MERRA + OE only.")
+        sub_ls = None
+    else:
+        sub_ls = _load_sub(INPUT_LS, need_ls)
+        if sub_ls is None:
+            raise SystemExit(f"Missing LS table: {INPUT_LS}")
+        if not sub_ls["time_utc"].equals(sub_oe["time_utc"]):
+            print("WARNING: time_utc differs between LS and OE. Filtering to intersection...")
+            common = sub_ls["time_utc"].reset_index().merge(
+                sub_oe["time_utc"].reset_index(), on="time_utc"
+            )["time_utc"]
+            sub_ls = sub_ls[sub_ls["time_utc"].isin(common)].copy()
+            sub_oe = sub_oe[sub_oe["time_utc"].isin(common)].copy()
+
+        base_meas = ["ghi", "bni", "dhi"]
+        for c in base_meas:
+            a = sub_ls[c].to_numpy(dtype=float)
+            b = sub_oe[c].to_numpy(dtype=float)
+            if not np.allclose(a, b, rtol=0, atol=1e-5, equal_nan=True):
+                print(f"WARNING: Measured {c!r} differs between inputs.")
 
 PANEL_MERRA = "MERRA-2"
 PANEL_LS = "TabPFN (LS)"

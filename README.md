@@ -5,7 +5,7 @@ Hybrid physical–ML pipeline for retrieving **Angstrom turbidity coefficient (b
 The pipeline combines two complementary approaches:
 
 1. **Least-squares (LS) retrieval** — physics-based inversion using the [libRadtran](http://www.libradtran.org) radiative transfer model (`uvspec`, DISORT solver, Kato2 band parameterisation, Angstrom aerosol).
-2. **[TabPFN](https://github.com/PriorLabs/TabPFN)** — a tabular foundation model that learns the mapping from radiation and meteorological inputs to (beta, H₂O), replacing the expensive per-row RT inversion at inference time.
+2. **[TabPFN](https://github.com/PriorLabs/TabPFN)** — a tabular foundation model that learns the mapping from radiation and meteorological inputs to **Ångström β and α**, replacing the per-row RT inversion at inference time.
 
 MERRA-2 reanalysis supplies prior/ancillary information (ozone, surface pressure, Angstrom alpha, surface albedo, total precipitable water, Angstrom beta).
 
@@ -16,17 +16,19 @@ MERRA-2 reanalysis supplies prior/ancillary information (ozone, surface pressure
 | 1 | `1.arrange.py` | **PAL/TAT/…:** edit **CONFIG** block (`STATION`, `YEAR`, optional paths); `Data/BSRN/<STATION>/`, AERONET `processed_<STATION>.txt`, out `Data/<STATION>_<year>_all.txt`. **QIQ:** `Code/old/1.arrange.py` → `qiq_1min_merra_qc.txt`. |
 | 2 | `2.create_holdout.py` | **PAL/TAT/…:** edit **CONFIG**; reads `<STATION>_<year>_all.txt` (must include AERONET); keeps rows with finite `aeronet_aod550` and `aeronet_alpha`; writes `<STATION>_<year>_trainpool.txt` + `_testpool.txt` (50:50). **QIQ:** `Code/old/2.create_holdout.py` (no AERONET). |
 | 3 | `3.latin_hypercube.py` | **PAL/TAT/…:** edit **CONFIG**; LHS sample (default 500) from `<STATION>_<year>_trainpool.txt` → `<STATION>_<year>_train_0.5k.txt`. **QIQ:** `Code/old/3.latin_hypercube.py` → `train_0.5k.txt`. |
-| 4a | `4a.retrieval_ls.py` | Runs the libRadtran forward model and nonlinear least-squares inversion to retrieve (beta, H₂O) for each training row. |
-| 5 | `5.tabpfn.py` | Trains a TabPFN regressor on the LS-retrieved labels and predicts (beta, H₂O) on the test pool. |
-| 6 | `6.evaluation.py` | Validates predictions by re-running the forward model with the predicted (beta, H₂O) and comparing fluxes. |
-| 6b | `6b.evaluation_aeronet.py` | Same layout as 6, but the second forward uses **AERONET** `aeronet_aod550` / `aeronet_alpha` (β from τ₅₅₀) and MERRA column water. |
+| 4a | `4a.retrieval_ls.py` | libRadtran forward + least-squares inversion; retrieves **(β, α)** per training row → `train_ls*.txt`. |
+| 4b | `4b.retrieval_oe.py` | Optimal-estimation retrieval **(β, α)** → `train_oe*.txt`. |
+| 5 | `5.tabpfn.py` | Trains TabPFN on LS or OE labels; run twice with `MODE=ls` and `MODE=oe` → `pred_ls*.txt`, `pred_oe*.txt`. |
+| 6 | `6.evaluation.py` | One pass per row: **MERRA explicit**, **TabPFN LS**, **TabPFN OE**, **AERONET** forwards (shared `merra_explicit_physics`). Merges `pred_ls` + `pred_oe` on `time_utc`; writes `test_combined*.txt`. Sets `LRT_SEASONAL_ATMOSPHERE=1` by default (same idea as 4a/4b). |
+| 7 | `7.retrieval_result.py` | AOD₅₅₀ / α densities and scatter vs AERONET (retrieval or `USE_TABPFN=1`); figures in `tex/figures/retrieval_result_distributions*.pdf`. |
 
 ### Supporting scripts
 
 | Script | Purpose |
 |--------|---------|
-| `plot_retrieval_scatter.py` | 1:1 scatter plots (MERRA-forward vs measured vs LS-forward) with MBE, RMSE %, and R². |
-| `example_merra_qiq.py` | Minimal one-day example of BSRN + MERRA-2 data access using the `bsrn` package. |
+| `10.plot_retrieval_scatter.py` | Measured vs forward **GHI/BNI/DHI** scatters (MERRA, TabPFN LS, TabPFN OE, optional AERONET). Prefers `test_combined*.txt` when present; `SKIP_LS=1` omits the LS panel. |
+
+**Legacy / archive:** older one-off scripts live under `Code/old/` (including former `7`–`9` analysis scripts moved out of the main numbered path).
 
 ### Data flow
 
@@ -34,10 +36,10 @@ MERRA-2 reanalysis supplies prior/ancillary information (ozone, surface pressure
 Raw BSRN + MERRA-2 (+ AERONET for PAL/TAT)
   └─[1]─► <STATION>_<year>_all.txt   (or QIQ: qiq_1min_merra_qc.txt via old/1.arrange)
             └─[2]─► <STATION>_<year>_trainpool.txt + <STATION>_<year>_testpool.txt
-                      └─[3]─► <STATION>_<year>_train_0.5k.txt   (or QIQ: train_0.5k.txt)
-                                └─[4]─► train_ls_{N}k.txt   (with retrieved β, H₂O)
-                                          └─[5]─► test_{N}k.txt    (with predicted β, H₂O)
-                                                    └─[6]─► test_ls_{N}k.txt   (with forward fluxes)
+                      └─[3]─► <STATION>_<year>_train_0.5k.txt
+                                └─[4a/4b]─► train_ls_{N}k.txt, train_oe_{N}k.txt  (retrieved β, α)
+                                          └─[5]─► pred_ls_{N}k.txt, pred_oe_{N}k.txt  (TabPFN β, α on test pool)
+                                                    └─[6]─► test_combined_{N}k.txt  (forward fluxes: MERRA, LS, OE, AERONET)
 ```
 
 ## Core library
@@ -46,7 +48,7 @@ Raw BSRN + MERRA-2 (+ AERONET for PAL/TAT)
 
 - `ClearskyConfig` dataclass and `build_uvspec_input` for assembling libRadtran input decks.
 - `run_clearsky` for calling the `uvspec` binary and parsing broadband fluxes.
-- `retrieve_beta_h2o_one_row` and `process_row_ls` for the least-squares retrieval loop.
+- `retrieve_one_row_ls` / `process_row_ls` for the least-squares retrieval loop (β, α).
 
 ## Prerequisites
 
@@ -109,10 +111,13 @@ $PY Code/3.latin_hypercube.py
 # QIQ LHS: $PY Code/old/3.latin_hypercube.py
 # Step 4a with PAL file: INPUT_DATA=Data/PAL_2024_train_0.5k.txt $PY Code/4a.retrieval_ls.py
 $PY Code/4a.retrieval_ls.py
-$PY Code/5.tabpfn.py
+$PY Code/4b.retrieval_oe.py
+MODE=ls $PY Code/5.tabpfn.py
+MODE=oe $PY Code/5.tabpfn.py
 $PY Code/6.evaluation.py
-# OE TabPFN predictions: MODE=oe $PY Code/5.tabpfn.py
-# OE forward validation: MODE=oe $PY Code/6.evaluation.py
+$PY Code/7.retrieval_result.py
+# TabPFN figures: USE_TABPFN=1 $PY Code/7.retrieval_result.py
+# Scatter plot: $PY Code/10.plot_retrieval_scatter.py
 ```
 
 ### Environment variables
@@ -131,10 +136,12 @@ $PY Code/6.evaluation.py
 | `INPUT_DATA` | 4 | `Data/train_0.5k.txt` | LS retrieval input (e.g. `Data/PAL_2024_train_0.5k.txt` for PAL). |
 | `OUTPUT_DATA` | 4 | `Data/train_ls_0.5k.txt` | Output with retrieved (beta, H₂O). |
 | `LHS_N` | 3–7 | `500` | LHS / pred / eval suffix (e.g. `_0.5k`); same as step 3. |
-| `MODE` | 5, 6 | `ls` | `ls` or `oe`; must match TabPFN training and pred file. |
+| `MODE` | 5 | `ls` | `ls` or `oe`; run step 5 twice for both TabPFN outputs (`pred_ls`, `pred_oe`). |
+| `LRT_SEASONAL_ATMOSPHERE` | 4a, 4b, 6 | `1` in 4a/4b/6 | Month-based AFGL `afglms`/`afglmw`; override with `0` if needed. |
+| `PLOT_INPUT_COMBINED` | 10 | `Data/..._test_combined<suffix>.txt` | Optional; defaults to combined step-6 output for scatter plots. |
 | `N_TEST` | 5 | `5000` | Number of test rows to predict. |
 | `LIBRADTRANDIR` | lib | `~/libRadtran-2.0.6` | Path to libRadtran installation. |
-| `PLOT_INPUT` | plot | `Data/train_ls_0.5k.txt` | Input for scatter plots. |
+| `SKIP_LS` | 10 | *(off)* | Set `1` to omit TabPFN (LS) panel in scatter plot. |
 
 ## License
 
