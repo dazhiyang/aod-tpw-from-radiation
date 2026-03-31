@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 import sys
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import StringIO
 from pathlib import Path
 
@@ -34,7 +34,11 @@ PROJECT = Path(__file__).resolve().parent.parent
 
 @dataclass(frozen=True)
 class ClearskyConfig:
-    """Defaults for ``build_uvspec_input`` / ``run_clearsky``."""
+    """Defaults for ``build_uvspec_input`` / ``run_clearsky``.
+
+    **Atmosphere profile:** override with env ``LRT_ATMOSPHERE`` (see ``_atmosphere_file_from_env``).
+    Default is mid-latitude **winter** ``atmmod/afglmw.dat``; ``afglms`` selects mid-latitude **summer**.
+    """
     wavelength_nm_min: float = 240.12
     wavelength_nm_max: float = 3000.0
     apply_wavelength_limits: bool = True
@@ -54,9 +58,85 @@ class ClearskyConfig:
     aerosol_season: int = 2
     aerosol_visibility_km: float = 20.0
     uvspec_timeout_s: int = 120
+    # If True, ``build_uvspec_input`` picks ``atmmod/afglms.dat`` vs ``afglmw.dat`` from calendar month
+    # (see ``_midlatitude_atmosphere_for_month``), using ``time_column`` or the row index name.
+    # Ignored when env ``LRT_ATMOSPHERE`` is set (fixed profile for all rows).
+    seasonal_atmosphere: bool = False
+    time_column: str = "time_utc"
+    # "north" — summer May–Sep → afglms; "south" — summer Nov–Mar → afglms
+    seasonal_hemisphere: str = "north"
+
+
+def _parse_atmosphere_token(v: str) -> str:
+    """Path fragment under libRadtran ``data/`` (``atmosphere_file`` keyword)."""
+    v = v.strip().lower()
+    if not v or v in ("afglmw", "mw"):
+        return "atmmod/afglmw.dat"
+    if v in ("afglms", "ms"):
+        return "atmmod/afglms.dat"
+    if "/" in v or v.endswith(".dat"):
+        return v
+    return f"atmmod/{v}.dat"
+
+
+def _atmosphere_file_from_env() -> str:
+    """Path fragment from env ``LRT_ATMOSPHERE`` (see ``_parse_atmosphere_token``)."""
+    return _parse_atmosphere_token(os.environ.get("LRT_ATMOSPHERE", ""))
+
+
+def _midlatitude_atmosphere_for_month(month: int, hemisphere: str) -> str:
+    """AFGL mid-latitude summer vs winter file from calendar month.
+
+    Northern hemisphere: **May–September** → ``afglms.dat``; else ``afglmw.dat``.
+    Southern hemisphere: **November–March** → ``afglms.dat``; else ``afglmw.dat``.
+    """
+    m = int(month)
+    h = hemisphere.strip().lower()
+    if h == "south":
+        return "atmmod/afglms.dat" if m in (11, 12, 1, 2, 3) else "atmmod/afglmw.dat"
+    return "atmmod/afglms.dat" if m in (5, 6, 7, 8, 9) else "atmmod/afglmw.dat"
+
+
+def _timestamp_from_row(row: pd.Series, time_column: str) -> pd.Timestamp:
+    """Timestamp for seasonal atmosphere: ``time_column`` or ``row.name`` (DatetimeIndex row)."""
+    if time_column in row.index:
+        return pd.Timestamp(row[time_column])
+    if row.name is not None:
+        return pd.Timestamp(row.name)
+    raise KeyError(
+        f"Cannot resolve time for seasonal atmosphere: no {time_column!r} in row and row has no .name"
+    )
+
+
+def _resolve_atmosphere_file_for_row(row: pd.Series, config: ClearskyConfig) -> str:
+    """Fixed profile from ``LRT_ATMOSPHERE``, else optional month-based AFGL file, else ``atmosphere_file``."""
+    env = os.environ.get("LRT_ATMOSPHERE", "").strip()
+    if env:
+        return _parse_atmosphere_token(env)
+    if config.seasonal_atmosphere:
+        ts = _timestamp_from_row(row, config.time_column)
+        return _midlatitude_atmosphere_for_month(ts.month, config.seasonal_hemisphere)
+    return config.atmosphere_file
+
+
+def _seasonal_atmosphere_from_env() -> bool:
+    return os.environ.get("LRT_SEASONAL_ATMOSPHERE", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _seasonal_hemisphere_from_env() -> str:
+    v = os.environ.get("LRT_SEASON_HEMISPHERE", "").strip().lower()
+    if v in ("south", "s", "sh"):
+        return "south"
+    return "north"
+
 
 DEFAULT_CLEARSKY_CONFIG = ClearskyConfig()
-CLEARSKY_CONFIG = DEFAULT_CLEARSKY_CONFIG
+CLEARSKY_CONFIG = replace(
+    DEFAULT_CLEARSKY_CONFIG,
+    atmosphere_file=_atmosphere_file_from_env(),
+    seasonal_atmosphere=_seasonal_atmosphere_from_env(),
+    seasonal_hemisphere=_seasonal_hemisphere_from_env(),
+)
 
 # LS Parameters
 BETA_MIN = 1e-6
@@ -177,7 +257,7 @@ def row_skip_ls(row: pd.Series) -> bool:
 def build_uvspec_input(
     row: pd.Series,
     libradtran_dir: str,
-    config: ClearskyConfig = DEFAULT_CLEARSKY_CONFIG,
+    config: ClearskyConfig = CLEARSKY_CONFIG,
     *,
     o3_du: float | None = None,
     w: float | None = None,
@@ -219,7 +299,8 @@ def build_uvspec_input(
         The multiline string for ``uvspec`` standard input.
     """
     data_dir = os.path.join(libradtran_dir, "data")
-    atmo_path = f"{data_dir}/{config.atmosphere_file}"
+    atm_rel = _resolve_atmosphere_file_for_row(row, config)
+    atmo_path = f"{data_dir}/{atm_rel}"
     solar_path = f"{data_dir}/{config.source_solar}"
 
     sza, albedo_v, pressure_hpa_v, o3_v, w_v, a, b = _resolve_physics(
@@ -279,7 +360,7 @@ def build_uvspec_input(
 def run_clearsky(
     row: pd.Series,
     libradtran_dir: str,
-    config: ClearskyConfig = DEFAULT_CLEARSKY_CONFIG,
+    config: ClearskyConfig = CLEARSKY_CONFIG,
     *,
     o3_du: float | None = None,
     w: float | None = None,
@@ -412,7 +493,7 @@ def calculate_residuals_ls(
     return y_sim - y_meas
 
 def retrieve_one_row_ls(
-    row: pd.Series, libradtran_dir: str, config: ClearskyConfig = DEFAULT_CLEARSKY_CONFIG,
+    row: pd.Series, libradtran_dir: str, config: ClearskyConfig = CLEARSKY_CONFIG,
 ) -> tuple[float, float, bool, float | None]:
     """
     Retrieves Angstrom beta and alpha for one row using least_squares.
@@ -564,7 +645,7 @@ def calculate_residuals_oe(
     return np.concatenate((res_y, res_x))
 
 def retrieve_one_row_oe(
-    row: pd.Series, libradtran_dir: str, config: ClearskyConfig = DEFAULT_CLEARSKY_CONFIG,
+    row: pd.Series, libradtran_dir: str, config: ClearskyConfig = CLEARSKY_CONFIG,
 ) -> tuple[float, float, bool, float | None]:
     """
     Retrieves Angstrom beta and alpha for one row using OE (least_squares with priors).

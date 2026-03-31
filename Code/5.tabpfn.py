@@ -1,5 +1,5 @@
 """
-5.tabpfn: Trains and runs the TabPFN machine-learning model for AOD/TPW retrieval.
+5.tabpfn: Trains and runs TabPFN to predict Ångström ``beta`` and ``alpha`` (same state as steps 4a/4b).
 
 **Training labels** come from step **4a** (``MODE=ls``) or **4b** (``MODE=oe``): default input is
 ``Data/<STATION>_<YEAR>_train_<MODE><suffix>.txt`` (same naming as ``4a`` / ``4b`` outputs from
@@ -25,7 +25,7 @@ import numpy as np
 import torch
 from tabpfn import TabPFNRegressor
 
-from libRadtran import BETA_MAX, BETA_MIN, W_MAX, W_MIN
+from libRadtran import ALPHA_MAX, ALPHA_MIN, BETA_MAX, BETA_MIN
 
 PROJECT = Path(__file__).resolve().parent.parent
 
@@ -72,7 +72,7 @@ FEATURES = [
     "merra_ALPHA", "merra_ALBEDO", "merra_TQV",
     "merra_TO3", "merra_PS",
 ]
-TARGETS = [f"beta_{MODE}", f"w_{MODE}"]
+TARGETS = [f"beta_{MODE}", f"alpha_{MODE}"]
 
 
 def _add_transmittance(df: pd.DataFrame) -> pd.DataFrame:
@@ -150,12 +150,12 @@ for target in TARGETS:
         preds_list.append(model.predict(batch_X))
     all_preds[target] = np.concatenate(preds_list)
 
-# Save predictions (clip to forward-model bounds; matches libRadtran.retrieve_one_row_ls)
+# Save predictions (clip to forward-model bounds; matches libRadtran retrieval)
 test_df[f"beta_pred_{MODE}"] = np.clip(
     all_preds[f"beta_{MODE}"], BETA_MIN, BETA_MAX,
 )
-test_df[f"w_pred_{MODE}"] = np.clip(
-    all_preds[f"w_{MODE}"], W_MIN, W_MAX,
+test_df[f"alpha_pred_{MODE}"] = np.clip(
+    all_preds[f"alpha_{MODE}"], ALPHA_MIN, ALPHA_MAX,
 )
 
 test_df.to_csv(PRED_OUT, sep="\t", index=False)

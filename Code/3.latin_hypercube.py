@@ -27,7 +27,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 STATION = "PAL"
 YEAR = 2024
 INPUT_TXT = PROJECT / "Data" / f"{STATION}_{YEAR}_trainpool.txt"
-LHS_N = 100
+LHS_N = 500
 SEED = 42
 ZENITH_MAX = 87.0
 

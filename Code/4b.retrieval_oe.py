@@ -5,6 +5,10 @@ Edit **CONFIG** to match ``1.arrange.py`` / ``2.create_holdout.py`` / ``3.latin_
 Default input is ``Data/<STATION>_<YEAR>_train_<suffix>.txt`` (same naming as step 3).
 
 **Overrides:** ``INPUT_DATA``, ``OUTPUT_DATA``, ``STATION``, ``YEAR``, ``LHS_N`` (env).
+
+**Atmosphere:** By default sets ``LRT_SEASONAL_ATMOSPHERE=1`` before importing ``libRadtran`` so each
+row uses month-based AFGL ``afglms``/``afglmw``. To use a fixed profile or disable seasonal selection,
+set ``LRT_ATMOSPHERE`` / ``LRT_SEASONAL_ATMOSPHERE=0`` in the environment (see ``libRadtran.ClearskyConfig``).
 """
 
 from __future__ import annotations
@@ -12,6 +16,10 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+
+# Month-based AFGL profile; must run before ``from libRadtran`` (``CLEARSKY_CONFIG`` reads env at import).
+if "LRT_SEASONAL_ATMOSPHERE" not in os.environ:
+    os.environ["LRT_SEASONAL_ATMOSPHERE"] = "1"
 
 import numpy as np
 import pandas as pd
@@ -32,7 +40,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 # =============================================================================
 STATION = os.environ.get("STATION", "PAL")
 YEAR = int(os.environ.get("YEAR", "2024"))
-LHS_N = int(os.environ.get("LHS_N", "100"))
+LHS_N = int(os.environ.get("LHS_N", "500"))
 _n = LHS_N
 if _n == 500:
     _k_suffix = "_0.5k"
