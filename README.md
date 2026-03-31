@@ -19,6 +19,7 @@ MERRA-2 reanalysis supplies prior/ancillary information (ozone, surface pressure
 | 4a | `4a.retrieval_ls.py` | Runs the libRadtran forward model and nonlinear least-squares inversion to retrieve (beta, H₂O) for each training row. |
 | 5 | `5.tabpfn.py` | Trains a TabPFN regressor on the LS-retrieved labels and predicts (beta, H₂O) on the test pool. |
 | 6 | `6.evaluation.py` | Validates predictions by re-running the forward model with the predicted (beta, H₂O) and comparing fluxes. |
+| 6b | `6b.evaluation_aeronet.py` | Same layout as 6, but the second forward uses **AERONET** `aeronet_aod550` / `aeronet_alpha` (β from τ₅₅₀) and MERRA column water. |
 
 ### Supporting scripts
 
@@ -110,6 +111,8 @@ $PY Code/3.latin_hypercube.py
 $PY Code/4a.retrieval_ls.py
 $PY Code/5.tabpfn.py
 $PY Code/6.evaluation.py
+# OE TabPFN predictions: MODE=oe $PY Code/5.tabpfn.py
+# OE forward validation: MODE=oe $PY Code/6.evaluation.py
 ```
 
 ### Environment variables
@@ -127,7 +130,8 @@ $PY Code/6.evaluation.py
 | `TEST_POOL` | 5 | `Data/testpool.txt` | Holdout test pool for TabPFN (e.g. `Data/PAL_2024_testpool.txt`). |
 | `INPUT_DATA` | 4 | `Data/train_0.5k.txt` | LS retrieval input (e.g. `Data/PAL_2024_train_0.5k.txt` for PAL). |
 | `OUTPUT_DATA` | 4 | `Data/train_ls_0.5k.txt` | Output with retrieved (beta, H₂O). |
-| `K_SUFFIX` | 5, 6 | `_0.5k` | Training-size suffix for file naming. |
+| `LHS_N` | 3–7 | `500` | LHS / pred / eval suffix (e.g. `_0.5k`); same as step 3. |
+| `MODE` | 5, 6 | `ls` | `ls` or `oe`; must match TabPFN training and pred file. |
 | `N_TEST` | 5 | `5000` | Number of test rows to predict. |
 | `LIBRADTRANDIR` | lib | `~/libRadtran-2.0.6` | Path to libRadtran installation. |
 | `PLOT_INPUT` | plot | `Data/train_ls_0.5k.txt` | Input for scatter plots. |

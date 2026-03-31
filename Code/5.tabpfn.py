@@ -1,10 +1,17 @@
 """
 5.tabpfn: Trains and runs the TabPFN machine-learning model for AOD/TPW retrieval.
 
+**Training labels** come from step **4a** (``MODE=ls``) or **4b** (``MODE=oe``): default input is
+``Data/<STATION>_<YEAR>_train_<MODE><suffix>.txt`` (same naming as ``4a`` / ``4b`` outputs from
+``3.latin_hypercube`` LHS). **Test pool** defaults to ``Data/<STATION>_<YEAR>_testpool.txt`` (step 2).
+
 We always compute ``ghi_trans``, ``bni_trans``, ``dhi_trans`` (measured / REST2 clear-sky) so they
-are present in memory and written to ``pred_*.txt``; TabPFN currently uses ``FEATURES`` below
-(measured flux + zenith + MERRA). To switch back to transmittance-only inputs, set
-``FEATURES = [*_TRANS, "zenith", ...]`` (and optionally drop ``*_MEAS`` from that list).
+are present in memory and written to the prediction file; TabPFN uses ``FEATURES`` below (measured
+flux + zenith + MERRA). To use transmittance-only inputs, set
+``FEATURES = [*_TRANS, "zenith", ...]``.
+
+**Overrides:** ``TRAIN_IN``, ``TEST_POOL``, ``PRED_OUT``, ``STATION``, ``YEAR``, ``LHS_N``, ``MODE``,
+``N_TEST`` (env). For a legacy flat name like ``Data/train_ls_0.5k.txt``, set ``TRAIN_IN`` explicitly.
 """
 
 from __future__ import annotations
@@ -22,18 +29,37 @@ from libRadtran import BETA_MAX, BETA_MIN, W_MAX, W_MIN
 
 PROJECT = Path(__file__).resolve().parent.parent
 
-# --- Suffix & Sampling Handling ---
-K_SUFFIX = os.environ.get("K_SUFFIX", "_0.5k")
-N_TEST = int(os.environ.get("N_TEST", "5000"))
+# =============================================================================
+# CONFIG — align with steps 2–4 (STATION, YEAR, LHS_N); MODE = ls (4a) or oe (4b).
+# =============================================================================
+STATION = os.environ.get("STATION", "PAL")
+YEAR = int(os.environ.get("YEAR", "2024"))
+LHS_N = int(os.environ.get("LHS_N", "500"))
+_n = LHS_N
+if _n == 500:
+    _k_suffix = "_0.5k"
+elif _n >= 1000:
+    _k_suffix = f"_{_n / 1000:g}k"
+else:
+    _k_suffix = f"_{_n}"
 
 MODE = os.environ.get("MODE", "ls").lower()
+if MODE not in ("ls", "oe"):
+    print(f"ERROR: MODE must be ls or oe, got {MODE!r}", file=sys.stderr)
+    sys.exit(1)
 
-# Input: The output from retrieval step
-TRAIN_IN = PROJECT / "Data" / f"train_{MODE}{K_SUFFIX}.txt"
-TEST_POOL = Path(
-    os.environ.get("TEST_POOL", str(PROJECT / "Data" / "testpool.txt"))
-)
-PRED_OUT = PROJECT / "Data" / f"pred_{MODE}{K_SUFFIX}.txt"
+N_TEST = int(os.environ.get("N_TEST", "5000"))
+
+# Outputs of 4a / 4b: e.g. Data/PAL_2024_train_ls_0.5k.txt, PAL_2024_train_oe_0.5k.txt
+_DEFAULT_TRAIN = PROJECT / "Data" / f"{STATION}_{YEAR}_train_{MODE}{_k_suffix}.txt"
+TRAIN_IN = Path(os.environ.get("TRAIN_IN", str(_DEFAULT_TRAIN)))
+
+_DEFAULT_TEST = PROJECT / "Data" / f"{STATION}_{YEAR}_testpool.txt"
+TEST_POOL = Path(os.environ.get("TEST_POOL", str(_DEFAULT_TEST)))
+
+_DEFAULT_PRED = PROJECT / "Data" / f"{STATION}_{YEAR}_pred_{MODE}{_k_suffix}.txt"
+PRED_OUT = Path(os.environ.get("PRED_OUT", str(_DEFAULT_PRED)))
+# =============================================================================
 
 _CLEAR = ("ghi_clear", "bni_clear", "dhi_clear")
 _TRANS = ("ghi_trans", "bni_trans", "dhi_trans")
@@ -63,7 +89,13 @@ if not TRAIN_IN.is_file():
     print(f"ERROR: Missing training data: {TRAIN_IN}")
     sys.exit(1)
 
-print(f"Loading training data: {TRAIN_IN.name}")
+if os.environ.get("TRAIN_IN"):
+    print(f"Loading training data: {TRAIN_IN}")
+else:
+    print(
+        f"Loading training data: {TRAIN_IN.name}  "
+        f"(STATION={STATION}, YEAR={YEAR}, MODE={MODE}, LHS_N={LHS_N})"
+    )
 train_df = pd.read_csv(TRAIN_IN, sep="\t")
 for c in _CLEAR:
     if c not in train_df.columns:

@@ -1,17 +1,23 @@
 """
-Scatter plots: one row, three panels — **MERRA-2**, **TabPFN 0.5k**, **TabPFN 2k**.
+Scatter plots: one row — **MERRA-2**, **TabPFN (LS)**, **TabPFN (OE)**, and optionally **AERONET**
+(``6b`` ``test_aeronet``) when ``PLOT_INPUT_AERONET`` / default ``Data/..._test_aeronet<suffix>.txt``
+is present and non-empty.
 
 Each panel overlays **GHI, BNI, DHI** (Wong colors) as measured vs libRadtran forward for that
-source. MERRA-2 and LS fluxes come from ``6.evaluation.py`` outputs; the 0.5k and 2k panels use
-``*_ls`` columns from the respective ``test_ls_*.txt`` files (same test instants).
+source. Inputs are ``6.evaluation.py`` outputs: ``test_ls`` / ``test_oe`` (MERRA + TabPFN forwards).
+
+**SKIP_LS** — if ``1`` / ``true``, or if the LS file is **missing**, only **MERRA + OE** (plus
+AERONET if available) are drawn (OE table alone supplies measured + ``*_merra`` + ``*_oe`` columns).
 
 Pooled statistics (GHI + BNI + DHI, all rows) per panel: MBE [W m⁻²], RMSE%, R².
 
-Env: ``K_SUFFIX`` (default ``_0.5k``), ``PLOT_INPUT_LS`` (default ``Data/test_ls{K_SUFFIX}.txt``),
-``PLOT_INPUT_OE`` (default ``Data/test_oe{K_SUFFIX}.txt``). Back-compat: if ``PLOT_INPUT`` is set
-and ``PLOT_INPUT_LS`` is not, ``PLOT_INPUT`` is used as LS input. Also ``PLOT_OUTPUT``,
-``PLOT_WIDTH_MM`` (default **160**), ``PLOT_HEIGHT_MM`` (default **56**), ``PLOT_SHOW``,
-``PLOT_OPEN``.
+Env: ``STATION``, ``YEAR``, ``LHS_N`` (defaults **PAL**, **2024**, **500**) set
+``Data/<STATION>_<YEAR>_test_ls_<suffix>.txt`` and ``..._test_oe_<suffix>.txt`` like step **6**.
+``SKIP_LS`` — ``1`` to omit TabPFN (LS) panel. ``K_SUFFIX`` / ``PLOT_INPUT_LS`` / ``PLOT_INPUT_OE``.
+Back-compat: if ``PLOT_INPUT`` is set and ``PLOT_INPUT_LS`` is not, ``PLOT_INPUT`` is LS input.
+Also ``PLOT_OUTPUT``, ``PLOT_INPUT_AERONET`` (optional AERONET panel),
+``PLOT_WIDTH_MM`` (default **160**, width scales with panel count so each facet stays similar size),
+``PLOT_HEIGHT_MM`` (default **70**), ``PLOT_SHOW``, ``PLOT_OPEN``.
 
 Requires: pandas, numpy, plotnine, matplotlib.
 """
@@ -44,20 +50,39 @@ from plotnine import (
 from plotnine.themes.elements.margin import margin
 
 PROJECT = Path(__file__).resolve().parent.parent
-K_SUFFIX = os.environ.get("K_SUFFIX", "_0.5k")
+
+STATION = os.environ.get("STATION", "PAL")
+YEAR = int(os.environ.get("YEAR", "2024"))
+LHS_N = int(os.environ.get("LHS_N", "500"))
+_n = LHS_N
+if _n == 500:
+    _k_suffix = "_0.5k"
+elif _n >= 1000:
+    _k_suffix = f"_{_n / 1000:g}k"
+else:
+    _k_suffix = f"_{_n}"
+K_SUFFIX = os.environ.get("K_SUFFIX", _k_suffix)
+
+_DEFAULT_TEST_LS = PROJECT / "Data" / f"{STATION}_{YEAR}_test_ls{_k_suffix}.txt"
+_DEFAULT_TEST_OE = PROJECT / "Data" / f"{STATION}_{YEAR}_test_oe{_k_suffix}.txt"
 INPUT_LS = Path(
     os.environ.get(
         "PLOT_INPUT_LS",
-        os.environ.get("PLOT_INPUT", str(PROJECT / "Data" / f"test_ls{K_SUFFIX}.txt")),
+        os.environ.get(
+            "PLOT_INPUT",
+            str(_DEFAULT_TEST_LS),
+        ),
     ),
 )
-INPUT_OE = Path(os.environ.get("PLOT_INPUT_OE", str(PROJECT / "Data" / f"test_oe{K_SUFFIX}.txt")))
+INPUT_OE = Path(os.environ.get("PLOT_INPUT_OE", str(_DEFAULT_TEST_OE)))
 OUTPUT_PNG = Path(
     os.environ.get(
         "PLOT_OUTPUT",
         str(PROJECT / "tex" / "figures" / "retrieval_scatter_ls_oe.png"),
     )
 )
+_DEFAULT_TEST_AERONET = PROJECT / "Data" / f"{STATION}_{YEAR}_test_aeronet{_k_suffix}.txt"
+INPUT_AERONET = Path(os.environ.get("PLOT_INPUT_AERONET", str(_DEFAULT_TEST_AERONET)))
 
 FIG_W_MM = float(os.environ.get("PLOT_WIDTH_MM", "160"))
 FIG_H_MM = float(os.environ.get("PLOT_HEIGHT_MM", "70"))
@@ -68,14 +93,26 @@ need_ls = [
     "ghi", "bni", "dhi", "ghi_merra", "bni_merra", "dhi_merra",
     "ghi_ls", "bni_ls", "dhi_ls",
 ]
+# MERRA columns included so one OE evaluation file can drive MERRA + OE panels when LS is skipped.
 need_oe = [
-    "ghi", "bni", "dhi", "ghi_oe", "bni_oe", "dhi_oe",
+    "ghi", "bni", "dhi", "ghi_merra", "bni_merra", "dhi_merra",
+    "ghi_oe", "bni_oe", "dhi_oe",
+]
+# ``6b.evaluation_aeronet.py`` output: MERRA + AERONET forward (``ghi_aeronet``, …).
+need_aeronet = [
+    "ghi", "bni", "dhi", "ghi_merra", "bni_merra", "dhi_merra",
+    "ghi_aeronet", "bni_aeronet", "dhi_aeronet",
 ]
 
-PANEL_MERRA = "MERRA-2"
-PANEL_05 = "TabPFN 0.5k trained"
-PANEL_2K = "TabPFN 2k trained"
 
+def _skip_ls() -> bool:
+    """Explicit ``SKIP_LS=1``, or auto when LS path is not a file."""
+    v = os.environ.get("SKIP_LS", "").strip().lower()
+    if v in ("1", "true", "yes"):
+        return True
+    if v in ("0", "false", "no"):
+        return False
+    return not INPUT_LS.is_file()
 
 def _load_sub(path: Path, columns: list[str]) -> pd.DataFrame | None:
     if not path.is_file():
@@ -130,31 +167,44 @@ def mbe_rmsepct_r2(x_meas: np.ndarray, y_fwd: np.ndarray) -> tuple[float, float,
     return mbe, rmse_pct, r2
 
 
-sub_ls = _load_sub(INPUT_LS, need_ls)
+skip_ls = _skip_ls()
 sub_oe = _load_sub(INPUT_OE, need_oe)
-
-if sub_ls is None:
-    raise SystemExit(f"Missing LS table: {INPUT_LS}")
 if sub_oe is None:
     raise SystemExit(f"Missing OE table: {INPUT_OE}")
 
-# Verify parity
-if not sub_ls["time_utc"].equals(sub_oe["time_utc"]):
-    print("WARNING: time_utc differs between LS and OE. Filtering to intersection...")
-    common = sub_ls["time_utc"].reset_index().merge(sub_oe["time_utc"].reset_index(), on="time_utc")["time_utc"]
-    sub_ls = sub_ls[sub_ls["time_utc"].isin(common)].copy()
-    sub_oe = sub_oe[sub_oe["time_utc"].isin(common)].copy()
+sub_ae = _load_sub(INPUT_AERONET, need_aeronet)
 
-base_meas = ["ghi", "bni", "dhi"]
-for c in base_meas:
-    a = sub_ls[c].to_numpy(dtype=float)
-    b = sub_oe[c].to_numpy(dtype=float)
-    if not np.allclose(a, b, rtol=0, atol=1e-5, equal_nan=True):
-         print(f"WARNING: Measured {c!r} differs between inputs.")
+sub_ls: pd.DataFrame | None
+if skip_ls:
+    if not INPUT_LS.is_file():
+        print(f"SKIP_LS: LS file not present ({INPUT_LS.name}); plotting MERRA + OE only.")
+    else:
+        print("SKIP_LS: TabPFN (LS) panel omitted; plotting MERRA + OE only.")
+    sub_ls = None
+else:
+    sub_ls = _load_sub(INPUT_LS, need_ls)
+    if sub_ls is None:
+        raise SystemExit(f"Missing LS table: {INPUT_LS}")
+    # Verify parity
+    if not sub_ls["time_utc"].equals(sub_oe["time_utc"]):
+        print("WARNING: time_utc differs between LS and OE. Filtering to intersection...")
+        common = sub_ls["time_utc"].reset_index().merge(
+            sub_oe["time_utc"].reset_index(), on="time_utc"
+        )["time_utc"]
+        sub_ls = sub_ls[sub_ls["time_utc"].isin(common)].copy()
+        sub_oe = sub_oe[sub_oe["time_utc"].isin(common)].copy()
+
+    base_meas = ["ghi", "bni", "dhi"]
+    for c in base_meas:
+        a = sub_ls[c].to_numpy(dtype=float)
+        b = sub_oe[c].to_numpy(dtype=float)
+        if not np.allclose(a, b, rtol=0, atol=1e-5, equal_nan=True):
+            print(f"WARNING: Measured {c!r} differs between inputs.")
 
 PANEL_MERRA = "MERRA-2"
 PANEL_LS = "TabPFN (LS)"
 PANEL_OE = "TabPFN (OE)"
+PANEL_AERONET = r"AERONET ($\tau_{550}$, $\alpha$)"
 
 pairs_merra = (
     ("ghi", "ghi_merra", "GHI"),
@@ -171,16 +221,31 @@ pairs_oe = (
     ("bni", "bni_oe", "BNI"),
     ("dhi", "dhi_oe", "DHI"),
 )
+pairs_aeronet = (
+    ("ghi", "ghi_aeronet", "GHI"),
+    ("bni", "bni_aeronet", "BNI"),
+    ("dhi", "dhi_aeronet", "DHI"),
+)
 
 panels_to_plot = []
-panels_to_plot.append(_long_overlay(pairs_merra, sub_ls, PANEL_MERRA))
-panels_to_plot.append(_long_overlay(pairs_ls, sub_ls, PANEL_LS))
-panels_to_plot.append(_long_overlay(pairs_oe, sub_oe, PANEL_OE))
+if skip_ls:
+    panels_to_plot.append(_long_overlay(pairs_merra, sub_oe, PANEL_MERRA))
+    panels_to_plot.append(_long_overlay(pairs_oe, sub_oe, PANEL_OE))
+    _panel_cat_list = [PANEL_MERRA, PANEL_OE]
+else:
+    assert sub_ls is not None
+    panels_to_plot.append(_long_overlay(pairs_merra, sub_ls, PANEL_MERRA))
+    panels_to_plot.append(_long_overlay(pairs_ls, sub_ls, PANEL_LS))
+    panels_to_plot.append(_long_overlay(pairs_oe, sub_oe, PANEL_OE))
+    _panel_cat_list = [PANEL_MERRA, PANEL_LS, PANEL_OE]
+
+if sub_ae is not None:
+    panels_to_plot.append(_long_overlay(pairs_aeronet, sub_ae, PANEL_AERONET))
+    _panel_cat_list = _panel_cat_list + [PANEL_AERONET]
 
 long_df = pd.concat(panels_to_plot, ignore_index=True)
 
 _comp_cat = pd.CategoricalDtype(categories=["GHI", "BNI", "DHI"], ordered=True)
-_panel_cat_list = [PANEL_MERRA, PANEL_LS, PANEL_OE]
 _panel_cat = pd.CategoricalDtype(categories=_panel_cat_list, ordered=True)
 
 long_df["component"] = long_df["component"].astype(_comp_cat)
@@ -199,11 +264,20 @@ line_df = pd.concat(
 )
 line_df["panel"] = line_df["panel"].astype(_panel_cat)
 
-stat_runs = [
-    (PANEL_MERRA, sub_ls, pairs_merra),
-    (PANEL_LS, sub_ls, pairs_ls),
-    (PANEL_OE, sub_oe, pairs_oe),
-]
+if skip_ls:
+    stat_runs = [
+        (PANEL_MERRA, sub_oe, pairs_merra),
+        (PANEL_OE, sub_oe, pairs_oe),
+    ]
+else:
+    assert sub_ls is not None
+    stat_runs = [
+        (PANEL_MERRA, sub_ls, pairs_merra),
+        (PANEL_LS, sub_ls, pairs_ls),
+        (PANEL_OE, sub_oe, pairs_oe),
+    ]
+if sub_ae is not None:
+    stat_runs = stat_runs + [(PANEL_AERONET, sub_ae, pairs_aeronet)]
 
 stat_rows: list[dict[str, str | float]] = []
 for panel_name, frame, pairs in stat_runs:
@@ -295,9 +369,11 @@ p = (
 )
 
 OUTPUT_PNG.parent.mkdir(parents=True, exist_ok=True)
+_n_panels = len(_panel_cat_list)
+_save_w_mm = FIG_W_MM * (_n_panels / 3.0)
 p.save(
     str(OUTPUT_PNG),
-    width=FIG_W_MM / 25.4,
+    width=_save_w_mm / 25.4,
     height=FIG_H_MM / 25.4,
     dpi=300,
     units="in",
