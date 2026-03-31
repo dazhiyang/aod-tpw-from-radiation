@@ -61,9 +61,12 @@ CLEARSKY_CONFIG = DEFAULT_CLEARSKY_CONFIG
 # LS Parameters
 BETA_MIN = 1e-6
 BETA_MAX = 1.1 # Chris' REST2 paper
+ALPHA_MIN = 0.3
+ALPHA_MAX = 2.0
 W_MIN = 0.05
 W_MAX = 100.0 # Chris' REST2 paper
 DIFF_STEP_BETA = 0.002
+DIFF_STEP_ALPHA = 0.01
 DIFF_STEP_W = 0.05
 MAX_NFEV = 40
 JAC_MODE = "2-point"
@@ -368,7 +371,7 @@ def run_clearsky(
 
 def calculate_residuals_ls(
     x: np.ndarray, row: pd.Series, libradtran_dir: str,
-    config: ClearskyConfig, alpha_m: float, o3_du_m: float,
+    config: ClearskyConfig, o3_du_m: float, w_m: float,
 ) -> np.ndarray:
     """
     Calculates residuals between simulated and measured GHI, BNI, and DHI.
@@ -376,34 +379,34 @@ def calculate_residuals_ls(
     Parameters:
     ------------
     x : np.ndarray
-        Sample state vector [beta, w].
+        State vector [beta, alpha].
     row : pd.Series
         Data row with measured 'ghi', 'bni', and 'dhi'.
     libradtran_dir : str
         Path to the libRadtran installation root.
     config : ClearskyConfig
         Reference configuration.
-    alpha_m : float
-        Fixed Angstrom alpha for this row.
     o3_du_m : float
         Fixed total column ozone for this row.
+    w_m : float
+        Fixed precipitable water from MERRA for this row.
 
     Returns:
     ------------
     residuals : np.ndarray
         Array of (sim - meas) for GHI, BNI, DHI.
     """
-    beta, w = float(x[0]), float(x[1])
+    beta, alpha = float(x[0]), float(x[1])
     sim = run_clearsky(
-        row, libradtran_dir, config, angstrom_alpha=alpha_m, o3_du=o3_du_m,
-        angstrom_beta=beta, w=w, quiet=True,
+        row, libradtran_dir, config, angstrom_alpha=alpha, o3_du=o3_du_m,
+        angstrom_beta=beta, w=w_m, quiet=True,
     )
     if pd.isna(sim["ghi_sim"]) or pd.isna(sim["bni_sim"]) or pd.isna(sim["dhi_sim"]):
         return np.full(3, FAILURE_PENALTY, dtype=float)
 
     y_meas = np.array([float(row["ghi"]), float(row["bni"]), float(row["dhi"])], dtype=float)
     y_sim = np.array([float(sim["ghi_sim"]), float(sim["bni_sim"]), float(sim["dhi_sim"])], dtype=float)
-    
+
     if not np.isfinite(y_meas).all():
         return np.full(3, FAILURE_PENALTY, dtype=float)
     return y_sim - y_meas
@@ -412,7 +415,7 @@ def retrieve_one_row_ls(
     row: pd.Series, libradtran_dir: str, config: ClearskyConfig = DEFAULT_CLEARSKY_CONFIG,
 ) -> tuple[float, float, bool, float | None]:
     """
-    Retrieves Angstrom beta and water vapor for one row using least_squares.
+    Retrieves Angstrom beta and alpha for one row using least_squares.
 
     Parameters:
     ------------
@@ -425,25 +428,25 @@ def retrieve_one_row_ls(
 
     Returns:
     ------------
-    (beta, w, success, cost) : tuple
+    (beta, alpha, success, cost) : tuple
         The retrieved values and optimization status.
     """
     if row_skip_ls(row):
         return np.nan, np.nan, False, None
 
-    alpha_m, o3_du_m, beta0, w0 = merra_explicit_physics(row, config)
-    x0 = np.array([beta0, w0], dtype=float)
-    bounds = (np.array([BETA_MIN, W_MIN]), np.array([BETA_MAX, W_MAX]))
-    diff_step = np.array([DIFF_STEP_BETA, DIFF_STEP_W])
+    alpha_m, o3_du_m, beta0, w_m = merra_explicit_physics(row, config)
+    x0 = np.array([beta0, alpha_m], dtype=float)
+    bounds = (np.array([BETA_MIN, ALPHA_MIN]), np.array([BETA_MAX, ALPHA_MAX]))
+    diff_step = np.array([DIFF_STEP_BETA, DIFF_STEP_ALPHA])
 
     try:
         result = least_squares(
-            calculate_residuals_ls, 
-            x0, 
-            args=(row, libradtran_dir, config, alpha_m, o3_du_m),
-            bounds=bounds, 
-            jac=JAC_MODE, 
-            diff_step=diff_step, 
+            calculate_residuals_ls,
+            x0,
+            args=(row, libradtran_dir, config, o3_du_m, w_m),
+            bounds=bounds,
+            jac=JAC_MODE,
+            diff_step=diff_step,
             max_nfev=MAX_NFEV,
         )
     except Exception as e:
@@ -506,12 +509,12 @@ def process_row_ls(row: pd.Series, libradtran_dir: str, config: ClearskyConfig) 
     bni_m = float(merra_sim["bni_sim"]) if pd.notna(merra_sim["bni_sim"]) else np.nan
     dhi_m = float(merra_sim["dhi_sim"]) if pd.notna(merra_sim["dhi_sim"]) else np.nan
 
-    beta_ls, w_ls, ok, _cost = retrieve_one_row_ls(row, libradtran_dir, config)
+    beta_ls, alpha_ls, ok, _cost = retrieve_one_row_ls(row, libradtran_dir, config)
 
-    if ok and np.isfinite(beta_ls) and np.isfinite(w_ls):
+    if ok and np.isfinite(beta_ls) and np.isfinite(alpha_ls):
         ls_sim = run_clearsky(
-            row, libradtran_dir, config, angstrom_alpha=alpha_m, o3_du=o3_du_m,
-            angstrom_beta=beta_ls, w=w_ls, quiet=True,
+            row, libradtran_dir, config, angstrom_alpha=alpha_ls, o3_du=o3_du_m,
+            angstrom_beta=beta_ls, w=w_m, quiet=True,
         )
         ghi_o = float(ls_sim["ghi_sim"]) if pd.notna(ls_sim["ghi_sim"]) else np.nan
         bni_o = float(ls_sim["bni_sim"]) if pd.notna(ls_sim["bni_sim"]) else np.nan
@@ -522,100 +525,87 @@ def process_row_ls(row: pd.Series, libradtran_dir: str, config: ClearskyConfig) 
     return pd.Series({
         "ghi_merra": ghi_m, "bni_merra": bni_m, "dhi_merra": dhi_m,
         "ghi_ls": ghi_o, "bni_ls": bni_o, "dhi_ls": dhi_o,
-        "beta_ls": beta_ls, "w_ls": w_ls,
+        "beta_ls": beta_ls, "alpha_ls": alpha_ls,
         "merra_ALPHA": alpha_m, "merra_BETA": beta_m,
         "merra_TO3": float(row["merra_TO3"]), "merra_TQV": float(row["merra_TQV"]),
     })
 
 def calculate_residuals_oe(
     x: np.ndarray, row: pd.Series, libradtran_dir: str,
-    config: ClearskyConfig, alpha_m: float, o3_du_m: float,
+    config: ClearskyConfig, o3_du_m: float, w_m: float,
     x_prior: np.ndarray, y_err: np.ndarray, x_err: np.ndarray
 ) -> np.ndarray:
     """
     Calculates the OE weighted residuals for both measurements and priors.
+
+    State vector is [beta, alpha]; water vapour w is fixed from MERRA.
 
     Uses only BNI and DHI as the measurement vector (not GHI) because
     GHI ≈ BNI·cos(SZA) + DHI — including all three with a diagonal S_ε
     would over-count measurement information and implicitly down-weight
     the prior constraint.
     """
-    beta, w = float(x[0]), float(x[1])
-    
-    # 1. Forward Model
+    beta, alpha = float(x[0]), float(x[1])
+
     sim = run_clearsky(
-        row, libradtran_dir, config, angstrom_alpha=alpha_m, o3_du=o3_du_m,
-        angstrom_beta=beta, w=w, quiet=True,
+        row, libradtran_dir, config, angstrom_alpha=alpha, o3_du=o3_du_m,
+        angstrom_beta=beta, w=w_m, quiet=True,
     )
-    
-    # 2. Extract Data (BNI + DHI only; GHI omitted to avoid redundancy)
+
     y_meas = np.array([float(row["bni"]), float(row["dhi"])], dtype=float)
     y_sim = np.array([float(sim["bni_sim"]), float(sim["dhi_sim"])], dtype=float)
-    
-    # Handle failure: penalty length = 2 meas + 2 prior = 4
+
     if not np.isfinite(y_sim).all() or not np.isfinite(y_meas).all():
         return np.full(4, FAILURE_PENALTY, dtype=float)
-        
-    # 3. Calculate Weighted Measurement Residuals
+
     res_y = (y_sim - y_meas) / y_err
-    
-    # 4. Calculate Weighted Prior Residuals
     res_x = (x - x_prior) / x_err
-    
-    # 5. Concatenate for the least_squares solver
+
     return np.concatenate((res_y, res_x))
 
 def retrieve_one_row_oe(
     row: pd.Series, libradtran_dir: str, config: ClearskyConfig = DEFAULT_CLEARSKY_CONFIG,
 ) -> tuple[float, float, bool, float | None]:
-    
+    """
+    Retrieves Angstrom beta and alpha for one row using OE (least_squares with priors).
+
+    Returns:
+    ------------
+    (beta, alpha, success, cost) : tuple
+    """
     if row_skip_ls(row):
         return np.nan, np.nan, False, None
 
-    alpha_m, o3_du_m, beta0, w0 = merra_explicit_physics(row, config)
-    
-    # --- The Optimal Estimation Setup ---
-    x_prior = np.array([beta0, w0], dtype=float)
-    
-    # 1. Dynamic Measurement Uncertainties (y_err) — BNI + DHI only
+    alpha_m, o3_du_m, beta0, w_m = merra_explicit_physics(row, config)
+
+    x_prior = np.array([beta0, alpha_m], dtype=float)
+
+    # Dynamic measurement uncertainties (BNI + DHI only)
     bni_meas = float(row["bni"])
     dhi_meas = float(row["dhi"])
-    
-    # Use max(percentage, absolute_floor) to protect against zero-offsets at twilight.
-    # abs() guards against negative readings from instrument offsets.
-    # BNI: ~1% error (pyrheliometers are highly accurate), minimum floor of 2.0 W/m^2
-    bni_err = max(0.01 * abs(bni_meas), 2.0)
-    
-    # DHI: ~3% error (shaded pyranometers have slightly higher relative uncertainty), floor of 5.0 W/m^2
-    dhi_err = max(0.03 * abs(dhi_meas), 5.0)
-    
-    y_err = np.array([bni_err, dhi_err], dtype=float) 
-    
-    # 2. Dynamic Prior Uncertainties (x_err / S_a)
-    # Realistic MERRA-2 uncertainties — loose enough for the retrieval to
-    # meaningfully depart from the prior when the measurements demand it,
-    # but tight enough to regularise under-determined conditions.
-    #
-    # Water Vapor: ~15% relative uncertainty (MERRA-2 vs GPS/radiosonde), min floor 1.0 mm.
-    w_err = max(0.15 * w0, 1.0)
-    
-    # Aerosol Turbidity: ~30% relative uncertainty (MERRA-2 vs AERONET), min floor 0.01.
-    beta_err = max(0.30 * beta0, 0.01)
-    
-    x_err = np.array([beta_err, w_err], dtype=float) 
-    
-    x0 = np.array([beta0, w0], dtype=float)
-    bounds = (np.array([BETA_MIN, W_MIN]), np.array([BETA_MAX, W_MAX]))
-    diff_step = np.array([DIFF_STEP_BETA, DIFF_STEP_W])
+    bni_err = max(0.02 * abs(bni_meas), 2.0)
+    dhi_err = max(0.05 * abs(dhi_meas), 5.0)
+    y_err = np.array([bni_err, dhi_err], dtype=float)
+
+    # Dynamic prior uncertainties
+    # Aerosol turbidity: ~30% relative (MERRA-2 vs AERONET), floor 0.01
+    beta_err = max(0.20 * beta0, 0.01)
+    # Ångström alpha: ~15% relative (MERRA-2 vs AERONET), floor 0.05
+    alpha_err = max(0.15 * alpha_m, 0.05)
+    x_err = np.array([beta_err, alpha_err], dtype=float)
+
+    x0 = np.array([beta0, alpha_m], dtype=float)
+    bounds = (np.array([BETA_MIN, ALPHA_MIN]), np.array([BETA_MAX, ALPHA_MAX]))
+    diff_step = np.array([DIFF_STEP_BETA, DIFF_STEP_ALPHA])
 
     try:
         result = least_squares(
-            calculate_residuals_oe, 
-            x0, 
-            args=(row, libradtran_dir, config, alpha_m, o3_du_m, x_prior, y_err, x_err),
-            bounds=bounds, 
-            jac=JAC_MODE, 
-            diff_step=diff_step, 
+            calculate_residuals_oe,
+            x0,
+            args=(row, libradtran_dir, config, o3_du_m, w_m, x_prior, y_err, x_err),
+            bounds=bounds,
+            jac=JAC_MODE,
+            diff_step=diff_step,
             max_nfev=MAX_NFEV,
         )
     except Exception as e:
@@ -638,12 +628,12 @@ def process_row_oe(row: pd.Series, libradtran_dir: str, config: ClearskyConfig) 
     bni_m = float(merra_sim["bni_sim"]) if pd.notna(merra_sim["bni_sim"]) else np.nan
     dhi_m = float(merra_sim["dhi_sim"]) if pd.notna(merra_sim["dhi_sim"]) else np.nan
 
-    beta_oe, w_oe, ok, _cost = retrieve_one_row_oe(row, libradtran_dir, config)
+    beta_oe, alpha_oe, ok, _cost = retrieve_one_row_oe(row, libradtran_dir, config)
 
-    if ok and np.isfinite(beta_oe) and np.isfinite(w_oe):
+    if ok and np.isfinite(beta_oe) and np.isfinite(alpha_oe):
         oe_sim = run_clearsky(
-            row, libradtran_dir, config, angstrom_alpha=alpha_m, o3_du=o3_du_m,
-            angstrom_beta=beta_oe, w=w_oe, quiet=True,
+            row, libradtran_dir, config, angstrom_alpha=alpha_oe, o3_du=o3_du_m,
+            angstrom_beta=beta_oe, w=w_m, quiet=True,
         )
         ghi_o = float(oe_sim["ghi_sim"]) if pd.notna(oe_sim["ghi_sim"]) else np.nan
         bni_o = float(oe_sim["bni_sim"]) if pd.notna(oe_sim["bni_sim"]) else np.nan
@@ -654,7 +644,7 @@ def process_row_oe(row: pd.Series, libradtran_dir: str, config: ClearskyConfig) 
     return pd.Series({
         "ghi_merra": ghi_m, "bni_merra": bni_m, "dhi_merra": dhi_m,
         "ghi_oe": ghi_o, "bni_oe": bni_o, "dhi_oe": dhi_o,
-        "beta_oe": beta_oe, "w_oe": w_oe,
+        "beta_oe": beta_oe, "alpha_oe": alpha_oe,
         "merra_ALPHA": alpha_m, "merra_BETA": beta_m,
         "merra_TO3": float(row["merra_TO3"]), "merra_TQV": float(row["merra_TQV"]),
     })

@@ -1,5 +1,5 @@
 """
-4a.retrieval_ls: libRadtran clear-sky least-squares retrieval (beta, H₂O).
+4a.retrieval_ls: libRadtran clear-sky least-squares retrieval (beta, alpha).
 
 Edit **CONFIG** to match ``1.arrange.py`` / ``2.create_holdout.py`` / ``3.latin_hypercube.py``.
 Default input is ``Data/<STATION>_<YEAR>_train_<suffix>.txt`` (same naming as step 3).
@@ -32,7 +32,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 # =============================================================================
 STATION = os.environ.get("STATION", "PAL")
 YEAR = int(os.environ.get("YEAR", "2024"))
-LHS_N = int(os.environ.get("LHS_N", "500"))
+LHS_N = int(os.environ.get("LHS_N", "100"))
 _n = LHS_N
 if _n == 500:
     _k_suffix = "_0.5k"
@@ -62,7 +62,7 @@ print(f"Starting retrieval for {len(df)} rows using libRadtran...")
 
 _ls_fn = lambda r: process_row_ls(r, LIBRADTRANDIR, CLEARSKY_CONFIG)
 if _tqdm is not None:
-    _tqdm.pandas(desc="LS Beta + H2O", leave=True)
+    _tqdm.pandas(desc="LS Beta + Alpha", leave=True)
     results = df.progress_apply(_ls_fn, axis=1)
 else:
     results = df.apply(_ls_fn, axis=1)
@@ -76,7 +76,7 @@ out = pd.concat([df_base, results], axis=1)
 cols = [
     "ghi", "bni", "dhi", "ghi_clear", "bni_clear", "dhi_clear",
     "ghi_merra", "bni_merra", "dhi_merra",
-    "ghi_ls", "bni_ls", "dhi_ls", "beta_ls", "w_ls",
+    "ghi_ls", "bni_ls", "dhi_ls", "beta_ls", "alpha_ls",
     "merra_ALPHA", "merra_BETA", "merra_TO3", "merra_TQV", "merra_ALBEDO", "merra_PS", "zenith",
 ]
 final_cols = [c for c in cols if c in out.columns]

@@ -3,9 +3,8 @@
 Edit **CONFIG** below for **PAL**, **TAT**, or another station/year (must match ``1.arrange.py`` output
 ``Data/<STATION>_<year>_all.txt``).
 
-Rows are kept only if **all** ``FEATURES`` are finite, physical GHI/GHI\\_clear cuts pass, and **both**
-``aeronet_aod550`` and ``aeronet_alpha`` are present (no sparse AERONET minutes). **No** ``clearsky == 1``
-filter.
+Rows are kept only if **all** ``FEATURES`` are finite, physical GHI/GHI\\_clear cuts pass,
+``clearsky == 1``, and **both** ``aeronet_aod550`` and ``aeronet_alpha`` are present.
 
 Writes ``Data/<STATION>_<year>_trainpool.txt`` and ``Data/<STATION>_<year>_testpool.txt``.
 
@@ -56,6 +55,7 @@ FEATURES = [
 ]
 
 OPTIONAL_COLS = ("clearsky", "aeronet_aod550", "aeronet_alpha")
+REQUIRED_EXTRA = ("clearsky", "aeronet_aod550", "aeronet_alpha")
 
 
 def _coerce_numeric(frame: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
@@ -80,9 +80,9 @@ missing = [c for c in FEATURES if c not in day_df.columns]
 if missing:
     print(f"ERROR: Missing columns: {missing}")
     sys.exit(1)
-for c in ("aeronet_aod550", "aeronet_alpha"):
+for c in REQUIRED_EXTRA:
     if c not in day_df.columns:
-        print(f"ERROR: Missing {c}; input must be from 1.arrange with AERONET merge.")
+        print(f"ERROR: Missing column '{c}'; input must be from 1.arrange with AERONET merge.")
         sys.exit(1)
 
 coerce_cols = list(FEATURES) + ["aeronet_aod550", "aeronet_alpha"]
@@ -93,14 +93,15 @@ out_cols = list(FEATURES) + optional_avail
 
 complete = day_df[FEATURES].notna().all(axis=1)
 phys = (day_df["ghi_clear"] > GHI_CLEAR_MIN) & (day_df["ghi"] >= 0)
+clear = day_df["clearsky"].astype(float) == 1
 aeronet_ok = day_df["aeronet_aod550"].notna() & day_df["aeronet_alpha"].notna()
-pool = day_df.loc[complete & phys & aeronet_ok, out_cols].copy()
+pool = day_df.loc[complete & phys & clear & aeronet_ok, out_cols].copy()
 pool.index.name = "time_utc"
 
 total_valid = len(pool)
 print(
     f"Daytime (zenith<={ZENITH_MAX}), FEATURES complete, ghi_clear>{GHI_CLEAR_MIN}, ghi>=0, "
-    f"AERONET AOD+alpha present: {total_valid} rows (no clearsky filter)."
+    f"clearsky==1, AERONET AOD+alpha present: {total_valid} rows."
 )
 
 if total_valid == 0:
@@ -117,8 +118,8 @@ print(f" -> Train pool:  {len(trainpool)} rows")
 common_meta = (
     f"# Station={STATION} Year={YEAR} | Source: {INPUT_TXT.name}\n"
     f"# Filters: Zenith<={ZENITH_MAX}; FEATURES complete; ghi_clear>{GHI_CLEAR_MIN}; ghi>=0; "
-    f"aeronet_aod550+aeronet_alpha present\n"
-    f"# No clearsky-only filter. Total={total_valid} | Test fraction={FRACTION} | Seed={SEED}\n"
+    f"clearsky==1; aeronet_aod550+aeronet_alpha present\n"
+    f"# Total={total_valid} | Test fraction={FRACTION} | Seed={SEED}\n"
 )
 
 print("Saving isolated datasets...")

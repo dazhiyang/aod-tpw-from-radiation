@@ -1,4 +1,4 @@
-"""BSRN LR0100 + MERRA + REST2 clear-sky + Lefèvre CSD, then left-merge 1-min AERONET (AOD550, alpha).
+"""BSRN LR0100 + MERRA + REST2 clear-sky + BrightSun CSD, then left-merge 1-min AERONET (AOD550, alpha).
 
 AERONET is treated as **instantaneous** (1-min aggregated) photometer data: we **reindex** to BSRN UTC minutes
 with **no interpolation** and no forward/back fill—only exact timestamp matches get values; elsewhere NaN
@@ -127,12 +127,13 @@ for path in paths:
         merged, station_code=STATION, model="rest2"
     )
 
-    # Lefèvre et al. (2013) CSD: GHI, DHI, extraterrestrial GHI, zenith (``bsrn.utils.lefevre_csd``).
-    csd = bsrn.utils.lefevre_csd(
-        merged["ghi"].to_numpy(dtype=float),
-        merged["dhi"].to_numpy(dtype=float),
-        merged["ghi_extra"].to_numpy(dtype=float),
+    # BrightSun CSD: stricter clear-sky detection using GHI + DHI vs REST2 clearsky envelopes.
+    csd = bsrn.utils.brightsun_csd(
         merged["zenith"].to_numpy(dtype=float),
+        merged["ghi"].to_numpy(dtype=float),
+        merged["ghi_clear"].to_numpy(dtype=float),
+        merged["dhi"].to_numpy(dtype=float),
+        merged["dhi_clear"].to_numpy(dtype=float),
         times=merged.index,
         return_diagnostics=False,
     )
@@ -164,7 +165,7 @@ combined.index.name = "time_utc"
 OUTPUT_TXT.parent.mkdir(parents=True, exist_ok=True)
 with open(OUTPUT_TXT, "w", encoding="ascii") as f:
     f.write(
-        f"# {STATION} {YEAR}: BSRN + REST2 clear-sky + zenith + MERRA_* + clearsky (Lefevre CSD); "
+        f"# {STATION} {YEAR}: BSRN + REST2 clear-sky + zenith + MERRA_* + clearsky (BrightSun CSD); "
         f"aeronet_* = AERONET only at exact UTC minutes (no interpolation); else blank. UTC.\n"
         f"# lat_deg={_meta['lat']:.6f} lon_deg={_meta['lon']:.6f} elev_m={_meta['elev']:.3f}\n"
         f"# aeronet_source={AERONET_PROCESSED.name}\n"
