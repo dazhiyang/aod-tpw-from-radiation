@@ -30,7 +30,9 @@ MODE = os.environ.get("MODE", "ls").lower()
 
 # Input: The output from retrieval step
 TRAIN_IN = PROJECT / "Data" / f"train_{MODE}{K_SUFFIX}.txt"
-TEST_POOL = PROJECT / "Data" / "testpool.txt"
+TEST_POOL = Path(
+    os.environ.get("TEST_POOL", str(PROJECT / "Data" / "testpool.txt"))
+)
 PRED_OUT = PROJECT / "Data" / f"pred_{MODE}{K_SUFFIX}.txt"
 
 _CLEAR = ("ghi_clear", "bni_clear", "dhi_clear")

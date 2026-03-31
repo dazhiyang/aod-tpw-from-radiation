@@ -1,79 +1,134 @@
-"""
-2.create_holdout: Extracts a strict 30% global holdout test set before LHS sampling.
+"""2.create_holdout: Daytime pool (complete FEATURES) → 50 % train / 50 % test split (before LHS).
+
+Edit **CONFIG** below for **PAL**, **TAT**, or another station/year (must match ``1.arrange.py`` output
+``Data/<STATION>_<year>_all.txt``).
+
+Rows are kept only if **all** ``FEATURES`` are finite, physical GHI/GHI\\_clear cuts pass, and **both**
+``aeronet_aod550`` and ``aeronet_alpha`` are present (no sparse AERONET minutes). **No** ``clearsky == 1``
+filter.
+
+Writes ``Data/<STATION>_<year>_trainpool.txt`` and ``Data/<STATION>_<year>_testpool.txt``.
+
+**QIQ** master file: ``Code/old/2.create_holdout.py`` → ``trainpool.txt`` / ``testpool.txt``.
+
+Set ``LHS_INPUT`` / ``TEST_POOL`` for station-specific pool names when running steps 3 and 5.
 """
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 PROJECT = Path(__file__).resolve().parent.parent
 
-INPUT_TXT = PROJECT / "Data" / "qiq_1min_merra_qc.txt"
-OUTPUT_TESTPOOL = PROJECT / "Data" / "testpool.txt"
-OUTPUT_TRAINPOOL = PROJECT / "Data" / "trainpool.txt"
+# =============================================================================
+# CONFIG — edit station and year (same convention as ``1.arrange.py``).
+# =============================================================================
+STATION = "PAL"
+YEAR = 2024
+INPUT_TXT = PROJECT / "Data" / f"{STATION}_{YEAR}_all.txt"
+OUTPUT_TESTPOOL = PROJECT / "Data" / f"{STATION}_{YEAR}_testpool.txt"
+OUTPUT_TRAINPOOL = PROJECT / "Data" / f"{STATION}_{YEAR}_trainpool.txt"
+# =============================================================================
 
 ZENITH_MAX = 87.0
-FRACTION = 0.30
+FRACTION = 0.50
 SEED = 42
+GHI_CLEAR_MIN = 10.0
 
 FEATURES = [
-    "ghi", "bni", "dhi",
-    "ghi_clear", "bni_clear", "dhi_clear",
+    "ghi",
+    "bni",
+    "dhi",
+    "ghi_clear",
+    "bni_clear",
+    "dhi_clear",
     "zenith",
-    "merra_ALPHA", "merra_ALBEDO", "merra_TQV",
-    "merra_TO3", "merra_PS", "merra_BETA",
+    "merra_ALPHA",
+    "merra_ALBEDO",
+    "merra_TQV",
+    "merra_TO3",
+    "merra_PS",
+    "merra_BETA",
 ]
 
-# --- Execution Logic ---
+OPTIONAL_COLS = ("clearsky", "aeronet_aod550", "aeronet_alpha")
+
+
+def _coerce_numeric(frame: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    out = frame.copy()
+    for c in cols:
+        out[c] = pd.to_numeric(out[c], errors="coerce")
+    return out
+
+
 if not INPUT_TXT.is_file():
     print(f"ERROR: Missing input file: {INPUT_TXT}")
     sys.exit(1)
 
-print(f"Loading master pool: {INPUT_TXT.name}...")
+print(f"{STATION} {YEAR}: loading {INPUT_TXT.name}...")
 df = pd.read_csv(INPUT_TXT, sep="\t", comment="#", parse_dates=["time_utc"], index_col="time_utc")
 df = df.sort_index()
 
-# Apply physical filters
 day = df["zenith"].astype(float) <= ZENITH_MAX
-clear = df["clearsky"].astype(int) == 1
+day_df = df.loc[day].copy()
 
-print("Filtering for clear-sky daytime conditions and dropping NaNs...")
-pool = df.loc[day & clear, FEATURES].dropna()
+missing = [c for c in FEATURES if c not in day_df.columns]
+if missing:
+    print(f"ERROR: Missing columns: {missing}")
+    sys.exit(1)
+for c in ("aeronet_aod550", "aeronet_alpha"):
+    if c not in day_df.columns:
+        print(f"ERROR: Missing {c}; input must be from 1.arrange with AERONET merge.")
+        sys.exit(1)
+
+coerce_cols = list(FEATURES) + ["aeronet_aod550", "aeronet_alpha"]
+day_df = _coerce_numeric(day_df, coerce_cols)
+
+optional_avail = [c for c in OPTIONAL_COLS if c in day_df.columns]
+out_cols = list(FEATURES) + optional_avail
+
+complete = day_df[FEATURES].notna().all(axis=1)
+phys = (day_df["ghi_clear"] > GHI_CLEAR_MIN) & (day_df["ghi"] >= 0)
+aeronet_ok = day_df["aeronet_aod550"].notna() & day_df["aeronet_alpha"].notna()
+pool = day_df.loc[complete & phys & aeronet_ok, out_cols].copy()
+pool.index.name = "time_utc"
 
 total_valid = len(pool)
-print(f"Total valid clear-sky rows available: {total_valid}")
+print(
+    f"Daytime (zenith<={ZENITH_MAX}), FEATURES complete, ghi_clear>{GHI_CLEAR_MIN}, ghi>=0, "
+    f"AERONET AOD+alpha present: {total_valid} rows (no clearsky filter)."
+)
 
-# 30% random sample for the strict holdout test set
+if total_valid == 0:
+    print("ERROR: Empty pool.")
+    sys.exit(1)
+
 holdout = pool.sample(frac=FRACTION, random_state=SEED).copy()
-holdout.index.name = "time_utc"
-
-# The remainder forms the new training pool (for Latin Hypercube sampling)
 trainpool = pool.drop(holdout.index).copy()
-trainpool.index.name = "time_utc"
 
-print(f"Split results ({FRACTION*100}% holdout):")
-print(f" -> Holdout Test Set: {len(holdout)} rows")
-print(f" -> LHS Train Pool:   {len(trainpool)} rows")
+print(f"Split results ({FRACTION * 100:.0f}% test / {100 - FRACTION * 100:.0f}% train):")
+print(f" -> Test pool:   {len(holdout)} rows")
+print(f" -> Train pool:  {len(trainpool)} rows")
 
-# Write exact metadata
 common_meta = (
-    f"# Source: {INPUT_TXT.name} | Filters: Zenith<={ZENITH_MAX}, Clearsky=1\n"
-    f"# Total={total_valid} | Split Fraction={FRACTION} | Seed={SEED}\n"
+    f"# Station={STATION} Year={YEAR} | Source: {INPUT_TXT.name}\n"
+    f"# Filters: Zenith<={ZENITH_MAX}; FEATURES complete; ghi_clear>{GHI_CLEAR_MIN}; ghi>=0; "
+    f"aeronet_aod550+aeronet_alpha present\n"
+    f"# No clearsky-only filter. Total={total_valid} | Test fraction={FRACTION} | Seed={SEED}\n"
 )
 
 print("Saving isolated datasets...")
 with open(OUTPUT_TESTPOOL, "w", encoding="ascii") as f:
-    f.write(common_meta + f"# HOLDOUT TEST SET ({len(holdout)} rows)\n")
-holdout.to_csv(OUTPUT_TESTPOOL, mode="a", sep="\t", float_format="%.12g")
+    f.write(common_meta + f"# TEST POOL ({len(holdout)} rows)\n")
+holdout.to_csv(OUTPUT_TESTPOOL, mode="a", sep="\t", float_format="%.12g", na_rep="")
 
 with open(OUTPUT_TRAINPOOL, "w", encoding="ascii") as f:
-    f.write(common_meta + f"# LHS TRAINING POOL ({len(trainpool)} rows)\n")
-trainpool.to_csv(OUTPUT_TRAINPOOL, mode="a", sep="\t", float_format="%.12g")
+    f.write(common_meta + f"# TRAIN POOL ({len(trainpool)} rows)\n")
+trainpool.to_csv(OUTPUT_TRAINPOOL, mode="a", sep="\t", float_format="%.12g", na_rep="")
 
-print(f"Successfully wrote {OUTPUT_TESTPOOL.name}")
-print(f"Successfully wrote {OUTPUT_TRAINPOOL.name}")
+print(f"Wrote {OUTPUT_TESTPOOL}")
+print(f"Wrote {OUTPUT_TRAINPOOL}")

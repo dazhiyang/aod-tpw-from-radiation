@@ -54,7 +54,7 @@ from libRadtran import (
 PROJECT = Path(__file__).resolve().parent.parent
 
 # Beijing calendar day to process (Asia/Shanghai). Override: ``BEIJING_DATE`` env or ``argv[1]``.
-BEIJING_DATE = "2024-11-23"
+BEIJING_DATE = "2024-09-06"
 K_SUFFIX = os.environ.get("K_SUFFIX", "_0.5k")
 
 _PT = 8
@@ -102,6 +102,8 @@ COLOR_MEAS = "#333333"
 COLOR_MERRA = "#E69F00"
 COLOR_TABPFN_LS = "#56B4E9"
 COLOR_TABPFN_OE = "#009E73"
+CLEAR_CURTAIN_COLOR = "#B3B3B3"
+CLEAR_CURTAIN_ALPHA = 0.15
 
 
 def _beijing_day_utc_bounds(day_str: str) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -195,7 +197,32 @@ def _tabpfn_fit_predict_clip(
             beta = np.clip(model.predict(X_day), BETA_MIN, BETA_MAX)
         else:
             w = np.clip(model.predict(X_day), W_MIN, W_MAX)
-    return beta, w
+    # Force plain arrays so callers can explicitly reindex by timestamp.
+    return np.asarray(beta, dtype=float), np.asarray(w, dtype=float)
+
+
+def _contiguous_true_spans(
+    t_local: pd.Series,
+    mask: np.ndarray,
+) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """Return contiguous ``True`` spans as ``[(start, end), ...]`` for ``axvspan`` curtains."""
+    spans: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    start_i: int | None = None
+    n = len(mask)
+    for i in range(n):
+        if mask[i] and start_i is None:
+            start_i = i
+        if start_i is not None and (i == n - 1 or not mask[i + 1]):
+            left = t_local.iloc[start_i]
+            if i + 1 < n:
+                right = t_local.iloc[i + 1]
+            elif i > start_i:
+                right = t_local.iloc[i]
+            else:
+                right = t_local.iloc[i] + pd.Timedelta(minutes=1)
+            spans.append((left, right))
+            start_i = None
+    return spans
 
 
 def main() -> None:
@@ -246,6 +273,7 @@ def main() -> None:
     day = _add_transmittance(day)
     day = day.replace([np.inf, -np.inf], np.nan)
     day = day.dropna(subset=FEATURES)
+    day["clearsky"] = pd.to_numeric(day["clearsky"], errors="coerce").fillna(0).astype(int)
     if day.empty:
         print("ERROR: No daytime rows after QC.", file=sys.stderr)
         sys.exit(1)
@@ -255,8 +283,12 @@ def main() -> None:
         print(f"MAX_ROWS: using first {n_max} rows.")
 
     day = day.set_index("time_utc").sort_index()
+    day_clear = day[day["clearsky"].eq(1)].copy()
+    if day_clear.empty:
+        print("ERROR: No clear-sky daytime rows for retrieval on this day.", file=sys.stderr)
+        sys.exit(1)
 
-    X_day = day[FEATURES]
+    X_day = day_clear[FEATURES]
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"TabPFN device: {device}")
 
@@ -274,24 +306,30 @@ def main() -> None:
         df_oe, ("beta_oe", "w_oe"), X_day, device, "OE targets",
     )
 
-    print("Forward models (MERRA + TabPFN-LS + TabPFN-OE, three uvspec calls per row)...")
+    # Bind predictions to timestamps explicitly to avoid any positional drift.
+    beta_ls_s = pd.Series(beta_ls, index=day_clear.index, dtype=float)
+    w_ls_s = pd.Series(w_ls, index=day_clear.index, dtype=float)
+    beta_oe_s = pd.Series(beta_oe, index=day_clear.index, dtype=float)
+    w_oe_s = pd.Series(w_oe, index=day_clear.index, dtype=float)
+
+    print("Forward models on clear-sky rows only (MERRA + TabPFN-LS + TabPFN-OE)...")
     m_rows: list[pd.Series] = []
     tls_rows: list[pd.Series] = []
     toe_rows: list[pd.Series] = []
-    for i, (_ts, row) in tqdm(
-        enumerate(day.iterrows()),
-        total=len(day),
+    for ts, row in tqdm(
+        day_clear.iterrows(),
+        total=len(day_clear),
         desc="libRadtran forward",
     ):
         m_rows.append(_forward_merra_row(row))
-        tls_rows.append(_forward_tabpfn_row(row, beta_ls[i], w_ls[i], "ls"))
-        toe_rows.append(_forward_tabpfn_row(row, beta_oe[i], w_oe[i], "oe"))
+        tls_rows.append(_forward_tabpfn_row(row, float(beta_ls_s.loc[ts]), float(w_ls_s.loc[ts]), "ls"))
+        toe_rows.append(_forward_tabpfn_row(row, float(beta_oe_s.loc[ts]), float(w_oe_s.loc[ts]), "oe"))
     day = pd.concat(
         [
             day,
-            pd.DataFrame(m_rows, index=day.index),
-            pd.DataFrame(tls_rows, index=day.index),
-            pd.DataFrame(toe_rows, index=day.index),
+            pd.DataFrame(m_rows, index=day_clear.index),
+            pd.DataFrame(tls_rows, index=day_clear.index),
+            pd.DataFrame(toe_rows, index=day_clear.index),
         ],
         axis=1,
     )
@@ -301,6 +339,8 @@ def main() -> None:
     # --- Figure: three rows (GHI, BNI, DHI), x = Beijing local time
     t_utc = pd.to_datetime(out["time_utc"], utc=True)
     t_bj = t_utc.dt.tz_convert(TZ_BEIJING)
+    clear_mask = out["clearsky"].fillna(0).astype(int).to_numpy() == 1
+    clear_spans = _contiguous_true_spans(t_bj.reset_index(drop=True), clear_mask)
 
     plt.rcParams.update(
         {
@@ -337,6 +377,15 @@ def main() -> None:
     fmt = mdates.DateFormatter("%H:%M")
 
     for ax, (comp, ylab) in zip(axes, flux_panels):
+        for t0, t1 in clear_spans:
+            ax.axvspan(
+                t0,
+                t1,
+                color=CLEAR_CURTAIN_COLOR,
+                alpha=CLEAR_CURTAIN_ALPHA,
+                linewidth=0,
+                zorder=0,
+            )
         ax.plot(t_bj, out[comp], color=COLOR_MEAS, label="Measured", zorder=5)
         ax.plot(t_bj, out[f"{comp}_merra"], color=COLOR_MERRA, label="MERRA-2 forward", zorder=2)
         ax.plot(
@@ -359,7 +408,7 @@ def main() -> None:
         ax.grid(True, color="black", alpha=0.35, linewidth=_LW)
 
     axes[0].set_title(
-        f"Irradiance — Beijing {beijing} (CST)",
+        f"Irradiance — Beijing {beijing} (CST); shaded = clear-sky retrieval windows",
         fontsize=_PT,
     )
     axes[-1].set_xlabel("Beijing time (CST)", fontsize=_PT)
