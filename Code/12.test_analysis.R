@@ -250,7 +250,7 @@ line.df <- data.frame(panel = rep(levels(irr.long$panel), each = 2),
                       measured = rep(c(lo, hi), times = length(levels(irr.long$panel))),
                       forward = rep(c(lo, hi), times = length(levels(irr.long$panel))),
                       grp = 0)
-# Add pooled per-panel annotation (as in 10.plot_retrieval_scatter.py style).
+# Add pooled per-panel annotation (MBE / RMSE% / R² style).
 irr.stats <- irr.long %>%
   group_by(panel) %>%
   summarise(

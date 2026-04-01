@@ -6,7 +6,7 @@
 - **Commenting**: Use inline comments for complex radiative transfer physics or math transforms.
 
 ## Project Structure
-- `Code/`: Contains numbered scripts (1–8, plus `10.*` plots, etc.) and the `libRadtran.py` library.
+- `Code/`: Contains numbered scripts (1–8, 11–12 figures, etc.) and the `libRadtran.py` library.
 - `Data/`: Contains raw measurements and generated training/test pools.
 - `tex/`: Contains LaTeX figures and booklets.
 

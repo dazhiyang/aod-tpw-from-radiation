@@ -37,13 +37,13 @@ These scripts assume the same `STATION`, `YEAR`, `LHS_N` / `_0.5k` naming as abo
 |--------|---------|
 | `6.xai.py` | TabPFN **SHAP** (needs `tabpfn-extensions[interpretability]`); writes tidy SHAP tables under `Data/` (e.g. `*_shap_oe_beta_0.5k.txt`) and figures under `tex/figures/`. Run with `MODE=ls` or `MODE=oe`. |
 | `7.irradiance.py` | Clear-sky forward validation (GHI/BNI/DHI): **MERRA explicit**, **TabPFN OE**, **AERONET** aerosol. **Input:** default `pred_oe<suffix>.txt`. **Output:** `test_irradiance<suffix>.txt`. |
-| `10.plot_retrieval_scatter.py` | Measured vs libRadtran forward **GHI/BNI/DHI** (plotnine). Prefers legacy `test_combined<suffix>.txt` if present; else `test_ls` / `test_oe` or `pred_*` tables — see script docstring. **`SKIP_LS=1`** (default) omits the **TabPFN LS** panel. |
+| `8.retrieval_oe_test.py` | **OE** on the **test pool** (same as **4b**, row-wise): default input `testpool.txt` → `test_oe.txt` (no LHS suffix). |
 | `11.train_analysis.py` | Train-side densities and AOD₅₅₀ / Ångström α scatters: physical **LS/OE** retrievals or `USE_TABPFN=1` with `pred_ls` + `pred_oe`. |
 | `11.train_analysis.R` | R counterpart for train figures (match styling with step 11 Python if desired). |
 | `12.test_analysis.py` | Composite **test** PDF: FGE violins, SHAP summaries, irradiance scatter (matplotlib + plotnine). Defaults: `pred_oe`, `train_oe`, SHAP files, `test_irradiance`. |
 | `12.test_analysis.R` | R **patchwork** composite for the same story (e.g. `scattermore` on irradiance panel). |
 
-**Note:** Older workflows used a bundled `6.evaluation.py` that wrote `test_combined*.txt` and a separate `7.retrieval_result.py`. Those files are **not** in this repository anymore. Use **`pred_ls` / `pred_oe`** from step 5, **`7.irradiance.py`** for flux validation, and **`12.test_analysis`** for the combined test figure. If you still have a legacy `test_combined*.txt`, `10.plot_retrieval_scatter.py` can read it via `PLOT_INPUT_COMBINED`.
+**Note:** Older workflows used a bundled `6.evaluation.py` that wrote `test_combined*.txt` and a separate `7.retrieval_result.py`. Those files are **not** in this repository anymore. Use **`pred_ls` / `pred_oe`** from step 5, **`7.irradiance.py`** for flux validation, and **`12.test_analysis`** for the combined test figure.
 
 **Legacy / archive:** older one-off scripts live under `Code/old/`.
 
@@ -53,12 +53,13 @@ These scripts assume the same `STATION`, `YEAR`, `LHS_N` / `_0.5k` naming as abo
 Raw BSRN + MERRA-2 (+ AERONET for PAL/TAT)
   └─[1]─► <STATION>_<year>_all.txt   (or QIQ: qiq_1min_merra_qc.txt via old/1.arrange)
             └─[2]─► <STATION>_<year>_trainpool.txt + <STATION>_<year>_testpool.txt
-                      └─[3]─► <STATION>_<year>_train_0.5k.txt
-                                └─[4a/4b]─► train_ls_{N}k.txt (LS), train_oe_{N}k.txt (OE) — retrieved (β, α)
-                                          └─[5]─► pred_ls_{N}k.txt, pred_oe_{N}k.txt — TabPFN (β, α) on test pool
-                                                    ├─► (optional) 6.xai.py → SHAP tables + figures
-                                                    ├─► (optional) 7.irradiance.py → test_irradiance_{N}k.txt
-                                                    └─► (optional) 10 / 11 / 12 → paper figures
+                      ├─[3]─► <STATION>_<year>_train_0.5k.txt
+                      │         └─[4a/4b]─► train_ls_{N}k.txt (LS), train_oe_{N}k.txt (OE) — retrieved (β, α)
+                      │                   └─[5]─► pred_ls_{N}k.txt, pred_oe_{N}k.txt — TabPFN (β, α) on test pool
+                      │                             ├─► (optional) 6.xai.py → SHAP tables + figures
+                      │                             ├─► (optional) 7.irradiance.py → test_irradiance_{N}k.txt
+                      │                             └─► (optional) 11 / 12 → paper figures
+                      └─ (optional) [8] testpool.txt → test_oe.txt — physical OE on holdout
 ```
 
 ## Core library
@@ -87,7 +88,7 @@ tabpfn
 torch
 tqdm
 bsrn
-plotnine          # scripts 10–12 (figures)
+plotnine          # scripts 11–12 (figures)
 ```
 
 Optional:
@@ -145,9 +146,9 @@ MODE=ls $PY Code/5.tabpfn.py
 MODE=oe $PY Code/5.tabpfn.py
 
 # Optional after step 5
+# $PY Code/8.retrieval_oe_test.py   # OE on testpool → test_oe.txt
 # MODE=oe $PY Code/6.xai.py
 # $PY Code/7.irradiance.py
-# $PY Code/10.plot_retrieval_scatter.py
 # USE_TABPFN=1 $PY Code/11.train_analysis.py
 # $PY Code/12.test_analysis.py
 # Rscript Code/12.test_analysis.R
@@ -162,22 +163,20 @@ MODE=oe $PY Code/5.tabpfn.py
 | `ARRANGE_ONE_FILE` | 1 | *(off)* Single input file. |
 | `LHS_INPUT` | old/3 | `Data/trainpool.txt` |
 | `LHS_TRAIN` | old/3 | `Data/train_0.5k.txt` |
-| `LHS_N` | 3–5, 6–7, 10–12 | `500` → `_0.5k` suffix pattern. |
+| `LHS_N` | 3–5, 6–7, 11–12 | `500` → `_0.5k` suffix on train/pred paths (not **8** `test_oe.txt`). |
 | `LHS_SEED` | old/3 | `42` |
 | `LHS_ZENITH_MAX` | old/3 | `87` |
-| `TEST_POOL` | 5, 6 | e.g. `Data/PAL_2024_testpool.txt` |
+| `TEST_POOL` | 5, 6, 8 | e.g. `Data/PAL_2024_testpool.txt` (8 default input if `INPUT_DATA` unset) |
 | `TRAIN_IN` | 5 | Default `train_{MODE}<suffix>.txt` from 4a/4b. |
 | `PRED_OUT` | 5 | Default `pred_{MODE}<suffix>.txt` |
-| `INPUT_DATA` | 4a, 4b | e.g. `Data/PAL_2024_train_0.5k.txt` |
-| `OUTPUT_DATA` | 4a, 4b | `train_ls*.txt` / `train_oe*.txt` |
+| `INPUT_DATA` | 4a, 4b, 8 | Train: `..._train_0.5k.txt`; test OE: `..._testpool.txt` (8 default). |
+| `OUTPUT_DATA` | 4a, 4b, 8 | `train_ls*` / `train_oe*`; **8:** `test_oe.txt` |
 | `MODE` | 5, 6 | `ls` or `oe` |
 | `N_TEST` | 5 | `5000` TabPFN prediction rows |
-| `LRT_SEASONAL_ATMOSPHERE` | 4a, 4b, 7 | `1` default (month-based AFGL); set `0` to override. |
+| `LRT_SEASONAL_ATMOSPHERE` | 4a, 4b, 7, 8 | `1` default (month-based AFGL); set `0` to override. |
 | `PRED_OE` | 7 | Default `pred_oe<suffix>.txt` |
 | `VAL_OUT` | 7 | Default `test_irradiance<suffix>.txt` |
 | `PRED_IN` | 7 | Single-table override instead of `PRED_OE` |
-| `PLOT_INPUT_COMBINED` | 10 | Legacy `test_combined<suffix>.txt` if available |
-| `SKIP_LS` | 10 | `1` = omit LS panel (default) |
 | `USE_TABPFN` | 11 | `1` = use `pred_ls` + `pred_oe` |
 | `TEST_COMBINED`, `TRAIN_OE`, `SHAP_*`, `IRRADIANCE_IN`, `OUTPUT_FIG` | 12 | See `12.test_analysis.py` / `.R` headers |
 | `LIBRADTRANDIR` | lib | `~/libRadtran-2.0.6` |
