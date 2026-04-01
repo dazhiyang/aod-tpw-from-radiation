@@ -14,6 +14,7 @@ suppressPackageStartupMessages({
   library(tidyr)
   library(ggplot2)
   library(patchwork)
+  library(scattermore)
 })
 
 # Used inside ggplot2::aes() / dplyr pipelines; avoids R CMD check / lintr NSE notes.
@@ -145,7 +146,7 @@ p.violin <- ggplot(fge.df, aes(x = dataset, y = value, fill = dataset, colour = 
   geom_boxplot(width = 0.12, outlier.alpha = 0.15, fill = "white", linewidth = 0.25) +
   geom_text(data = ann, aes(x = xpos, y = y, label = label), inherit.aes = FALSE,
             hjust = 0,
-            vjust = 1, lineheight = 0.9, size = (plot.size / .pt) * 0.80, colour = "black") +
+            vjust = 1, lineheight = 0.9, size = plot.size / .pt, colour = "black") +
   facet_wrap(~ variable, nrow = 2, ncol = 1, scales = "free_y", labeller = label_parsed) +
   scale_fill_manual(values = c("MERRA-2" = col.merra, "TabPFN" = col.tabpfn)) +
   scale_colour_manual(values = c("MERRA-2" = col.merra, "TabPFN" = col.tabpfn)) +
@@ -161,8 +162,8 @@ feature.labels <- c(
   bni = "italic(B)[italic(n)]",
   dhi = "italic(D)[italic(h)]",
   zenith = "theta[italic(z)]",
-  merra_ALPHA = "alpha[italic(merra2)]",
-  merra_BETA = "beta[italic(merra2)]",
+  merra_ALPHA = "alpha[merra2]",
+  merra_BETA = "beta[merra2]",
   merra_ALBEDO = "rho",
   merra_TO3 = "italic(u)[italic(o)]",
   merra_PS = "italic(p)[italic(s)]",
@@ -259,20 +260,25 @@ irr.stats <- irr.long %>%
   mutate(
     tx = lo + 0.04 * (hi - lo),
     ty = lo + 0.95 * (hi - lo),
-    txt = sprintf("RMSE =\n%.2f W m^-2", rmse)
+    txt = sprintf("'RMSE ='~%.1f~W~m^{-2}", rmse)
   )
 
 p.irr <- ggplot(irr.long, aes(x = measured, y = forward, colour = component)) +
-  geom_point(alpha = 0.55, size = point.size, stroke = 0) +
+  geom_scattermore(
+    pointsize = 3,
+    pixels = c(512L, 512L),
+    interpolate = TRUE
+  ) +
   geom_line(data = line.df, aes(x = measured, y = forward, group = grp), inherit.aes = FALSE,
             linetype = "dashed", linewidth = line.size, colour = "black", alpha = 0.65) +
   geom_text(data = irr.stats, aes(x = tx, y = ty, label = txt), inherit.aes = FALSE,
-            hjust = 0, vjust = 1, size = plot.size / .pt, colour = "black", lineheight = 0.9) +
+            hjust = 0, vjust = 1, size = plot.size / .pt, colour = "black", lineheight = 0.9, parse = TRUE) +
   facet_wrap(~ panel, nrow = 1, scales = "fixed") +
   scale_colour_manual(values = comp.colors) +
   coord_fixed(ratio = 1, xlim = c(lo, hi), ylim = c(lo, hi), expand = FALSE) +
   labs(title = "(c) Forward irradiance",
-       x = "Measured (W m^-2)", y = "libRadtran forward (W m^-2)") +
+       x = expression("Measured ("*W~m^{-2}*")"),
+       y = expression("libRadtran forward ("*W~m^{-2}*")")) +
   theme.common +
   theme(
     legend.position = "bottom",
