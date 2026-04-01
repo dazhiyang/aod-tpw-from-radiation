@@ -83,6 +83,7 @@ FEATURES = [
     *_MEAS,
     "zenith",
     "merra_ALPHA",
+    "merra_BETA",
     "merra_ALBEDO",
     "merra_TQV",
     "merra_TO3",
@@ -150,6 +151,24 @@ def _shap_to_array(raw: object) -> np.ndarray:
     if isinstance(raw, shap.Explanation):
         return np.asarray(raw.values)
     return np.asarray(raw, dtype=float)
+
+
+class _NamedFeaturePredictor:
+    """Adapter that guarantees DataFrame input with training feature names/order."""
+
+    def __init__(self, model: TabPFNRegressor, feature_names: list[str]) -> None:
+        self.model = model
+        self.feature_names = list(feature_names)
+
+    def predict(self, x: pd.DataFrame | np.ndarray) -> np.ndarray:
+        if isinstance(x, pd.DataFrame):
+            x_df = x.reindex(columns=self.feature_names)
+        else:
+            arr = np.asarray(x, dtype=float)
+            if arr.ndim == 1:
+                arr = arr.reshape(1, -1)
+            x_df = pd.DataFrame(arr, columns=self.feature_names)
+        return np.asarray(self.model.predict(x_df), dtype=float)
 
 
 def _save_summary(shap_vals: np.ndarray, x_df: pd.DataFrame, title: str, out_path: Path) -> None:
@@ -258,6 +277,7 @@ def main() -> None:
         y_tr = train_df[target]
         model = TabPFNRegressor(device=device)
         model.fit(x_train, y_tr)
+        model_for_shap = _NamedFeaturePredictor(model, FEATURES)
 
         shap_kw: dict = {}
         algo = os.environ.get("SHAP_ALGORITHM", "").strip()
@@ -265,7 +285,7 @@ def main() -> None:
             shap_kw["algorithm"] = algo
 
         raw = get_shap_values(
-            model,
+            model_for_shap,
             x_shap,
             attribute_names=FEATURES,
             **shap_kw,

@@ -64,8 +64,12 @@ _MEAS = ("ghi", "bni", "dhi")
 FEATURES = [
     *_MEAS,
     "zenith",
-    "merra_ALPHA", "merra_ALBEDO", "merra_TQV",
-    "merra_TO3", "merra_PS",
+    "merra_ALPHA",
+    "merra_BETA",
+    "merra_ALBEDO",
+    "merra_TQV",
+    "merra_TO3",
+    "merra_PS",
 ]
 TARGETS = [f"beta_{MODE}", f"alpha_{MODE}"]
 

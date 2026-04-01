@@ -1,20 +1,17 @@
 """
-12.test_analysis: OE train-vs-test error diagnostics (extensible plotting scaffold).
+12.test_analysis: OE test error diagnostics (extensible plotting scaffold).
 
 First plot implemented:
 - Violin comparison of **bias error** and **fractional error** for OE-only
 - Variables: ``beta`` and ``alpha``
-- Datasets:
-  - Train OE table: ``Data/<STATION>_<YEAR>_train_oe<suffix>.txt``
+- Dataset:
   - Test OE prediction table: ``Data/<STATION>_<YEAR>_pred_oe<suffix>.txt``
+  - Train OE retrieval table: ``Data/<STATION>_<YEAR>_train_oe<suffix>.txt`` (for FGE % diagnostics)
 
-Error definitions (reference = **AERONET** for all panels; train/test tables must include
-``aeronet_aod550`` and ``aeronet_alpha``):
-- squared error: ``(pred - ref)^2``
+Error definition (reference = **AERONET**):
 - fractional gross error: ``2*abs(pred - ref)/(pred + ref)``  (NaN where ``pred + ref <= 0``)
-Plotting transform:
-- squared error is displayed as ``log10(squared error + EPS_LOG)`` for readability.
-- fractional gross error is displayed as ``log10(fractional gross error + EPS_LOG)``.
+
+Plot styling matches ``11.train_analysis.R`` (9 pt, Times New Roman, 160 mm width).
 
 This script is structured to allow adding more plot builders, similar to step 11.
 """
@@ -29,15 +26,21 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.gridspec import GridSpec
 from plotnine import (
     aes,
+    coord_fixed,
     element_blank,
     element_line,
     element_rect,
     element_text,
     facet_grid,
+    facet_wrap,
     geom_boxplot,
     geom_hline,
+    geom_line,
+    geom_point,
     geom_text,
     geom_violin,
     ggplot,
@@ -58,9 +61,14 @@ LHS_N = int(os.environ.get("LHS_N", "500"))
 _n = LHS_N
 _k_suffix = "_0.5k" if _n == 500 else f"_{_n / 1000:g}k" if _n >= 1000 else f"_{_n}"
 
-TRAIN_OE = Path(os.environ.get("TRAIN_OE", str(PROJECT / "Data" / f"{STATION}_{YEAR}_train_oe{_k_suffix}.txt")))
 TEST_COMBINED = Path(
     os.environ.get("TEST_COMBINED", str(PROJECT / "Data" / f"{STATION}_{YEAR}_pred_oe{_k_suffix}.txt"))
+)
+TRAIN_OE = Path(os.environ.get("TRAIN_OE", str(PROJECT / "Data" / f"{STATION}_{YEAR}_train_oe{_k_suffix}.txt")))
+SHAP_ALPHA = Path(os.environ.get("SHAP_ALPHA", str(PROJECT / "Data" / f"{STATION}_{YEAR}_shap_oe_alpha{_k_suffix}.txt")))
+SHAP_BETA = Path(os.environ.get("SHAP_BETA", str(PROJECT / "Data" / f"{STATION}_{YEAR}_shap_oe_beta{_k_suffix}.txt")))
+IRRADIANCE_IN = Path(
+    os.environ.get("IRRADIANCE_IN", str(PROJECT / "Data" / f"{STATION}_{YEAR}_test_irradiance{_k_suffix}.txt"))
 )
 
 OUTPUT_FIG = Path(
@@ -73,21 +81,42 @@ OUTPUT_FIG = Path(
 FIG_W_MM = float(os.environ.get("FIG_W_MM", "160"))
 FIG_H_MM = float(os.environ.get("FIG_H_MM", "95"))
 
-_PT = 8
+# Match ``11.train_analysis.R`` (plot.size <- 9).
+_PT = 9
 _LW = 0.3
-EPS_LOG = float(os.environ.get("EPS_LOG", "1e-8"))
-
+ANNOT_Y = 1.5
+# AOD SHAP summary plot x-axis limits (matches 12.test_analysis.R).
+SHAP_AOD_XLIM = (-0.52, 0.52)
 WONG_ORANGE = "#E69F00"  # MERRA-2
 WONG_BLUE = "#56B4E9"    # TabPFN OE (test)
-WONG_GREEN = "#009E73"   # OE train
+WONG_GREEN = "#009E73"   # DHI
+WONG_FEATURE_CMAP = LinearSegmentedColormap.from_list(
+    "wong_blue_light_orange",
+    [WONG_BLUE, "#F2F2F2", WONG_ORANGE],
+)
 
 DATASET_ORDER = [
-    "Train (OE retrieval vs AERONET)",
-    "Test (TabPFN OE vs AERONET)",
-    "Test (MERRA-2 vs AERONET)",
+    "MERRA-2",
+    "TabPFN",
 ]
-DATASET_COLORS = [WONG_GREEN, WONG_BLUE, WONG_ORANGE]
+DATASET_COLORS = [WONG_ORANGE, WONG_BLUE]
 
+XAI_FEATURE_LABELS: dict[str, str] = {
+    "ghi": r"$G_h$",
+    "dhi": r"$D_h$",
+    "bni": r"$B_n$",
+    "zenith": r"$\theta_z$",
+    "merra_ALPHA": r"$\alpha_{\mathrm{merra2}}$",
+    "merra_BETA": r"$\beta_{\mathrm{merra2}}$",
+    "merra_ALBEDO": r"$\rho$",
+    "merra_TO3": r"$u_o$",
+    "merra_PS": r"$p_s$",
+    "merra_TQV": r"$w$",
+}
+
+
+def _xai_feature_display_names(columns: list[str]) -> list[str]:
+    return [XAI_FEATURE_LABELS.get(c, c) for c in columns]
 
 def _validate_columns(df: pd.DataFrame, cols: list[str], path: Path) -> None:
     miss = [c for c in cols if c not in df.columns]
@@ -100,39 +129,26 @@ def _aod550_from_beta_alpha(beta: np.ndarray, alpha: np.ndarray) -> np.ndarray:
 
 
 def _load_long_error_table() -> tuple[pd.DataFrame, pd.DataFrame]:
-    if not TRAIN_OE.is_file():
-        raise SystemExit(f"Missing TRAIN_OE: {TRAIN_OE}")
     if not TEST_COMBINED.is_file():
         raise SystemExit(f"Missing TEST_COMBINED: {TEST_COMBINED}")
+    if not TRAIN_OE.is_file():
+        raise SystemExit(f"Missing TRAIN_OE: {TRAIN_OE}")
 
-    tr = pd.read_csv(TRAIN_OE, sep="\t", parse_dates=["time_utc"])
     te = pd.read_csv(TEST_COMBINED, sep="\t", parse_dates=["time_utc"])
+    tr = pd.read_csv(TRAIN_OE, sep="\t", parse_dates=["time_utc"])
 
-    _validate_columns(
-        tr,
-        [
-            "beta_oe",
-            "alpha_oe",
-            "merra_BETA",
-            "merra_ALPHA",
-            "aeronet_aod550",
-            "aeronet_alpha",
-        ],
-        TRAIN_OE,
-    )
     _validate_columns(
         te,
         ["beta_pred_oe", "alpha_pred_oe", "merra_BETA", "merra_ALPHA", "aeronet_aod550", "aeronet_alpha"],
         TEST_COMBINED,
     )
+    _validate_columns(
+        tr,
+        ["beta_oe", "alpha_oe", "merra_BETA", "merra_ALPHA", "aeronet_aod550", "aeronet_alpha"],
+        TRAIN_OE,
+    )
 
     # AOD_550 + alpha representations
-    tr_aod_p = _aod550_from_beta_alpha(tr["beta_oe"].to_numpy(dtype=float), tr["alpha_oe"].to_numpy(dtype=float))
-    tr_alpha_p = tr["alpha_oe"].to_numpy(dtype=float)
-    # Reference: AERONET (same convention as test block: τ₅₅₀ and Ångström α)
-    tr_aod_r = tr["aeronet_aod550"].to_numpy(dtype=float)
-    tr_alpha_r = tr["aeronet_alpha"].to_numpy(dtype=float)
-
     te_aod_oe = _aod550_from_beta_alpha(
         te["beta_pred_oe"].to_numpy(dtype=float), te["alpha_pred_oe"].to_numpy(dtype=float)
     )
@@ -141,6 +157,12 @@ def _load_long_error_table() -> tuple[pd.DataFrame, pd.DataFrame]:
     te_alpha_merra = te["merra_ALPHA"].to_numpy(dtype=float)
     te_aod_ae = te["aeronet_aod550"].to_numpy(dtype=float)
     te_alpha_ae = te["aeronet_alpha"].to_numpy(dtype=float)
+    tr_aod_oe = _aod550_from_beta_alpha(tr["beta_oe"].to_numpy(dtype=float), tr["alpha_oe"].to_numpy(dtype=float))
+    tr_alpha_oe = tr["alpha_oe"].to_numpy(dtype=float)
+    tr_aod_merra = _aod550_from_beta_alpha(tr["merra_BETA"].to_numpy(dtype=float), tr["merra_ALPHA"].to_numpy(dtype=float))
+    tr_alpha_merra = tr["merra_ALPHA"].to_numpy(dtype=float)
+    tr_aod_ae = tr["aeronet_aod550"].to_numpy(dtype=float)
+    tr_alpha_ae = tr["aeronet_alpha"].to_numpy(dtype=float)
 
     def _fge(pred: np.ndarray, ref: np.ndarray) -> np.ndarray:
         out = np.full_like(pred, np.nan, dtype=float)
@@ -149,77 +171,96 @@ def _load_long_error_table() -> tuple[pd.DataFrame, pd.DataFrame]:
         out[m] = 2.0 * np.abs(pred[m] - ref[m]) / den[m]
         return out
 
-    def _rmse_fge(pred: np.ndarray, ref: np.ndarray) -> tuple[float, float, int]:
-        """Match step-11 metrics: RMSE on finite pairs; FGE is mean row-wise FGE."""
+    def _summary_metrics(pred: np.ndarray, ref: np.ndarray) -> tuple[float, float, float, float, int]:
+        """MBE/RMSE/FB/FGE on finite pairs (FGE is mean row-wise FGE)."""
         m = np.isfinite(pred) & np.isfinite(ref)
         n = int(np.sum(m))
         if n == 0:
-            return float("nan"), float("nan"), 0
+            return float("nan"), float("nan"), float("nan"), float("nan"), 0
         p = pred[m]
         r = ref[m]
+        mbe = float(np.mean(p - r))
         rmse = float(np.sqrt(np.mean((p - r) ** 2)))
+        den_fb = float(np.mean(p) + np.mean(r))
+        fb = float(2.0 * (np.mean(r) - np.mean(p)) / den_fb) if den_fb > 0 else float("nan")
         fge_vec = _fge(p, r)
         m_fge = np.isfinite(fge_vec)
         fge = float(np.mean(fge_vec[m_fge])) if int(np.sum(m_fge)) > 0 else float("nan")
-        return rmse, fge, n
+        return mbe, rmse, fb, fge, n
+
+    def _pct_improve(fge_model: float, fge_baseline: float) -> float:
+        """Positive value means model improves over baseline."""
+        if not np.isfinite(fge_model) or not np.isfinite(fge_baseline) or fge_baseline == 0:
+            return float("nan")
+        return 100.0 * (fge_baseline - fge_model) / fge_baseline
+
+    # -------- Cross-split diagnostics: does TabPFN add error? --------
+    _, _, _, fge_test_tabpfn_aod, n_test_aod = _summary_metrics(te_aod_oe, te_aod_ae)
+    _, _, _, fge_test_merra_aod, _ = _summary_metrics(te_aod_merra, te_aod_ae)
+    _, _, _, fge_test_tabpfn_alpha, n_test_alpha = _summary_metrics(te_alpha_oe, te_alpha_ae)
+    _, _, _, fge_test_merra_alpha, _ = _summary_metrics(te_alpha_merra, te_alpha_ae)
+    _, _, _, fge_train_oe_aod, n_train_aod = _summary_metrics(tr_aod_oe, tr_aod_ae)
+    _, _, _, fge_train_merra_aod, _ = _summary_metrics(tr_aod_merra, tr_aod_ae)
+    _, _, _, fge_train_oe_alpha, n_train_alpha = _summary_metrics(tr_alpha_oe, tr_alpha_ae)
+    _, _, _, fge_train_merra_alpha, _ = _summary_metrics(tr_alpha_merra, tr_alpha_ae)
+
+    imp_test_tabpfn_vs_merra_aod = _pct_improve(fge_test_tabpfn_aod, fge_test_merra_aod)
+    imp_test_tabpfn_vs_merra_alpha = _pct_improve(fge_test_tabpfn_alpha, fge_test_merra_alpha)
+    imp_train_oe_vs_merra_aod = _pct_improve(fge_train_oe_aod, fge_train_merra_aod)
+    imp_train_oe_vs_merra_alpha = _pct_improve(fge_train_oe_alpha, fge_train_merra_alpha)
+
+    print("\n=== FGE % improvement diagnostics (positive = lower FGE) ===")
+    print(
+        f"TEST  AOD_550: TabPFN vs MERRA-2 = {imp_test_tabpfn_vs_merra_aod:+.2f}%  "
+        f"(n={n_test_aod}, FGE_tabpfn={fge_test_tabpfn_aod:.6f}, FGE_merra={fge_test_merra_aod:.6f})"
+    )
+    print(
+        f"TEST  alpha  : TabPFN vs MERRA-2 = {imp_test_tabpfn_vs_merra_alpha:+.2f}%  "
+        f"(n={n_test_alpha}, FGE_tabpfn={fge_test_tabpfn_alpha:.6f}, FGE_merra={fge_test_merra_alpha:.6f})"
+    )
+    print(
+        f"TRAIN AOD_550: OE retrieval vs MERRA-2 = {imp_train_oe_vs_merra_aod:+.2f}%  "
+        f"(n={n_train_aod}, FGE_oe={fge_train_oe_aod:.6f}, FGE_merra={fge_train_merra_aod:.6f})"
+    )
+    print(
+        f"TRAIN alpha  : OE retrieval vs MERRA-2 = {imp_train_oe_vs_merra_alpha:+.2f}%  "
+        f"(n={n_train_alpha}, FGE_oe={fge_train_oe_alpha:.6f}, FGE_merra={fge_train_merra_alpha:.6f})"
+    )
 
     blocks: list[pd.DataFrame] = []
     stat_rows: list[dict] = []
     for dataset, pred_aod, pred_alpha, ref_aod, ref_alpha in (
-        (DATASET_ORDER[0], tr_aod_p, tr_alpha_p, tr_aod_r, tr_alpha_r),
-        (DATASET_ORDER[1], te_aod_oe, te_alpha_oe, te_aod_ae, te_alpha_ae),
-        (DATASET_ORDER[2], te_aod_merra, te_alpha_merra, te_aod_ae, te_alpha_ae),
+        ("MERRA-2", te_aod_merra, te_alpha_merra, te_aod_ae, te_alpha_ae),
+        ("TabPFN", te_aod_oe, te_alpha_oe, te_aod_ae, te_alpha_ae),
     ):
-        rmse_b, fge_b, n_b = _rmse_fge(pred_aod, ref_aod)
-        rmse_a, fge_a, n_a = _rmse_fge(pred_alpha, ref_alpha)
-        print(f"{dataset} AOD_550: n={n_b}, RMSE={rmse_b:.6f}, FGE={fge_b:.6f}")
-        print(f"{dataset} Angstrom alpha: n={n_a}, RMSE={rmse_a:.6f}, FGE={fge_a:.6f}")
+        mbe_b, rmse_b, fb_b, fge_b, n_b = _summary_metrics(pred_aod, ref_aod)
+        mbe_a, rmse_a, fb_a, fge_a, n_a = _summary_metrics(pred_alpha, ref_alpha)
+        print(f"{dataset} AOD_550: n={n_b}, MBE={mbe_b:.6f}, RMSE={rmse_b:.6f}, FB={fb_b:.6f}, FGE={fge_b:.6f}")
+        print(
+            f"{dataset} Angstrom alpha: n={n_a}, MBE={mbe_a:.6f}, RMSE={rmse_a:.6f}, "
+            f"FB={fb_a:.6f}, FGE={fge_a:.6f}"
+        )
         stat_rows.extend(
             [
                 {
                     "dataset": dataset,
-                    "variable": r"AOD$_{550}$",
-                    "metric": "Squared error",
-                    "label": f"n={n_b}\nRMSE={rmse_b:.4f}\nFGE={fge_b:.4f}",
-                },
-                {
-                    "dataset": dataset,
                     "variable": r"Ångström $\alpha$",
-                    "metric": "Squared error",
-                    "label": f"n={n_a}\nRMSE={rmse_a:.4f}\nFGE={fge_a:.4f}",
+                    "metric": "Fractional gross error",
+                    "label": f"n={n_a}\nMBE={mbe_a:.4f}\nRMSE={rmse_a:.4f}\nFB={fb_a:.4f}\nFGE={fge_a:.4f}",
                 },
                 {
                     "dataset": dataset,
                     "variable": r"AOD$_{550}$",
                     "metric": "Fractional gross error",
-                    "label": f"n={n_b}\nRMSE={rmse_b:.4f}\nFGE={fge_b:.4f}",
-                },
-                {
-                    "dataset": dataset,
-                    "variable": r"Ångström $\alpha$",
-                    "metric": "Fractional gross error",
-                    "label": f"n={n_a}\nRMSE={rmse_a:.4f}\nFGE={fge_a:.4f}",
+                    "label": f"n={n_b}\nMBE={mbe_b:.4f}\nRMSE={rmse_b:.4f}\nFB={fb_b:.4f}\nFGE={fge_b:.4f}",
                 },
             ]
         )
 
-        b_se = (pred_aod - ref_aod) ** 2
-        a_se = (pred_alpha - ref_alpha) ** 2
         b_fge = _fge(pred_aod, ref_aod)
         a_fge = _fge(pred_alpha, ref_alpha)
         blocks.extend(
             [
-                pd.DataFrame(
-                    {"dataset": dataset, "variable": r"AOD$_{550}$", "metric": "Squared error", "value": b_se}
-                ),
-                pd.DataFrame(
-                    {
-                        "dataset": dataset,
-                        "variable": r"Ångström $\alpha$",
-                        "metric": "Squared error",
-                        "value": a_se,
-                    }
-                ),
                 pd.DataFrame(
                     {
                         "dataset": dataset,
@@ -241,14 +282,7 @@ def _load_long_error_table() -> tuple[pd.DataFrame, pd.DataFrame]:
 
     long_df = pd.concat(blocks, ignore_index=True)
     long_df = long_df.replace([np.inf, -np.inf], np.nan).dropna(subset=["value"]).copy()
-    m_se = long_df["metric"] == "Squared error"
-    m_fge = long_df["metric"] == "Fractional gross error"
-    long_df.loc[m_se, "value"] = np.log10(long_df.loc[m_se, "value"].to_numpy(dtype=float) + EPS_LOG)
-    long_df.loc[m_fge, "value"] = np.log10(long_df.loc[m_fge, "value"].to_numpy(dtype=float) + EPS_LOG)
-    long_df.loc[m_se, "metric"] = f"log10(Squared error + {EPS_LOG:g})"
-    long_df.loc[m_fge, "metric"] = f"log10(Fractional gross error + {EPS_LOG:g})"
-    metric_sq = f"log10(Squared error + {EPS_LOG:g})"
-    metric_fge = f"log10(Fractional gross error + {EPS_LOG:g})"
+    metric_fge = "Fractional gross error"
     long_df["dataset"] = pd.Categorical(long_df["dataset"], categories=DATASET_ORDER, ordered=True)
     long_df["variable"] = pd.Categorical(
         long_df["variable"],
@@ -257,47 +291,200 @@ def _load_long_error_table() -> tuple[pd.DataFrame, pd.DataFrame]:
     )
     long_df["metric"] = pd.Categorical(
         long_df["metric"],
-        categories=[metric_sq, metric_fge],
+        categories=[metric_fge],
         ordered=True,
     )
     ann_df = pd.DataFrame(stat_rows)
-    ann_df["metric"] = ann_df["metric"].replace(
-        {"Squared error": metric_sq, "Fractional gross error": metric_fge}
-    )
-    # Place annotations near top of each facet.
-    y_pos = (
-        long_df.groupby(["metric", "variable"], observed=True)["value"]
-        .agg(["min", "max"])
-        .reset_index()
-    )
-    y_pos["y"] = y_pos["max"] - 0.06 * (y_pos["max"] - y_pos["min"]).replace(0, 1.0)
-    ann_df = ann_df.merge(y_pos[["metric", "variable", "y"]], on=["metric", "variable"], how="left")
+    # Fixed y-position (not relative to violin/data spread).
+    ann_df["y"] = ANNOT_Y
     ann_df["dataset"] = pd.Categorical(ann_df["dataset"], categories=DATASET_ORDER, ordered=True)
     ann_df["variable"] = pd.Categorical(
         ann_df["variable"],
         categories=[r"AOD$_{550}$", r"Ångström $\alpha$"],
         ordered=True,
     )
-    ann_df["metric"] = pd.Categorical(ann_df["metric"], categories=[metric_sq, metric_fge], ordered=True)
+    ann_df["metric"] = pd.Categorical(ann_df["metric"], categories=[metric_fge], ordered=True)
     return long_df, ann_df
 
 
 def _theme_common():
     return (
-        theme_bw(base_size=_PT, base_family="serif")
+        theme_bw(base_size=_PT, base_family="Times New Roman")
         + theme(
-            text=element_text(size=_PT, family="serif"),
-            axis_title=element_text(size=_PT),
-            axis_text=element_text(size=_PT),
-            strip_text=element_text(size=_PT),
+            text=element_text(size=_PT, family="Times New Roman"),
+            axis_title=element_text(size=_PT, family="Times New Roman"),
+            axis_text=element_text(size=_PT, family="Times New Roman"),
+            strip_text=element_text(size=_PT, family="Times New Roman"),
+            plot_title=element_text(size=_PT, family="Times New Roman"),
             legend_title=element_blank(),
-            legend_position="top",
+            legend_position="bottom",
             panel_grid_major=element_line(color="#d9d9d9", size=_LW),
             panel_grid_minor=element_blank(),
             panel_border=element_rect(fill=None, color="black", size=_LW),
             axis_ticks=element_line(color="black", size=_LW),
         )
     )
+
+
+def _load_irradiance_scatter_table() -> tuple[pd.DataFrame, pd.DataFrame, float, float]:
+    if not IRRADIANCE_IN.is_file():
+        raise SystemExit(f"Missing IRRADIANCE_IN: {IRRADIANCE_IN}")
+    df = pd.read_csv(IRRADIANCE_IN, sep="\t", parse_dates=["time_utc"])
+    need = [
+        "ghi", "bni", "dhi",
+        "ghi_merra", "bni_merra", "dhi_merra",
+        "ghi_oe", "bni_oe", "dhi_oe",
+        "ghi_aeronet", "bni_aeronet", "dhi_aeronet",
+    ]
+    _validate_columns(df, need, IRRADIANCE_IN)
+    sub = df.dropna(subset=need).copy()
+    if len(sub) == 0:
+        raise SystemExit(f"No complete rows for irradiance scatter in {IRRADIANCE_IN}")
+
+    def _long_overlay(
+        frame: pd.DataFrame, panel: str, pairs: tuple[tuple[str, str, str], ...]
+    ) -> pd.DataFrame:
+        parts: list[pd.DataFrame] = []
+        for xcol, ycol, comp in pairs:
+            t = frame[[xcol, ycol]].rename(columns={xcol: "measured", ycol: "forward"})
+            t["component"] = comp
+            t["panel"] = panel
+            parts.append(t)
+        return pd.concat(parts, ignore_index=True)
+
+    panel_merra = "MERRA-2"
+    panel_oe = "TabPFN"
+    panel_ae = "AERONET"
+    pairs_merra = (("ghi", "ghi_merra", "GHI"), ("bni", "bni_merra", "BNI"), ("dhi", "dhi_merra", "DHI"))
+    pairs_oe = (("ghi", "ghi_oe", "GHI"), ("bni", "bni_oe", "BNI"), ("dhi", "dhi_oe", "DHI"))
+    pairs_ae = (("ghi", "ghi_aeronet", "GHI"), ("bni", "bni_aeronet", "BNI"), ("dhi", "dhi_aeronet", "DHI"))
+    long_df = pd.concat(
+        [
+            _long_overlay(sub, panel_merra, pairs_merra),
+            _long_overlay(sub, panel_oe, pairs_oe),
+            _long_overlay(sub, panel_ae, pairs_ae),
+        ],
+        ignore_index=True,
+    )
+    panel_order = [panel_merra, panel_oe, panel_ae]
+    long_df["panel"] = pd.Categorical(long_df["panel"], categories=panel_order, ordered=True)
+    long_df["component"] = pd.Categorical(long_df["component"], categories=["GHI", "BNI", "DHI"], ordered=True)
+
+    # Print component-wise irradiance errors per panel.
+    print("\n=== Irradiance error diagnostics (forward - measured) ===")
+    for panel in panel_order:
+        for comp in ("GHI", "BNI", "DHI"):
+            s = long_df[(long_df["panel"] == panel) & (long_df["component"] == comp)]
+            err = (s["forward"] - s["measured"]).to_numpy(dtype=float)
+            m = np.isfinite(err)
+            n = int(np.sum(m))
+            if n == 0:
+                mbe = float("nan")
+                rmse = float("nan")
+            else:
+                e = err[m]
+                mbe = float(np.mean(e))
+                rmse = float(np.sqrt(np.mean(e**2)))
+            print(f"{panel} {comp}: n={n}, MBE={mbe:.3f} W m^-2, RMSE={rmse:.3f} W m^-2")
+
+    lo = float(long_df["measured"].min())
+    hi = float(long_df["measured"].max())
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+        lo, hi = 0.0, 1.0
+    line_df = pd.concat(
+        [pd.DataFrame({"measured": [lo, hi], "forward": [lo, hi], "grp": 0, "panel": p}) for p in panel_order],
+        ignore_index=True,
+    )
+    line_df["panel"] = pd.Categorical(line_df["panel"], categories=panel_order, ordered=True)
+    return long_df, line_df, lo, hi
+
+
+def _load_xai_long(path: Path) -> pd.DataFrame:
+    if not path.is_file():
+        raise SystemExit(f"Missing SHAP file: {path}")
+    df = pd.read_csv(path, sep="\t")
+    _validate_columns(df, ["sample_index", "feature", "shap_value", "feature_value"], path)
+    return df.replace([np.inf, -np.inf], np.nan).dropna(subset=["sample_index", "feature", "shap_value", "feature_value"])
+
+
+def _xai_to_matrices(df: pd.DataFrame) -> tuple[np.ndarray, pd.DataFrame]:
+    shap_wide = df.pivot(index="sample_index", columns="feature", values="shap_value").sort_index().astype(float)
+    feat_wide = df.pivot(index="sample_index", columns="feature", values="feature_value").sort_index().astype(float)
+    cols = [c for c in shap_wide.columns if c in feat_wide.columns]
+    return shap_wide[cols].to_numpy(dtype=float), feat_wide[cols]
+
+
+def _reorder_xai_by_aod_columns(
+    beta_vals: np.ndarray,
+    beta_feat: pd.DataFrame,
+    alpha_vals: np.ndarray,
+    alpha_feat: pd.DataFrame,
+) -> tuple[np.ndarray, pd.DataFrame, np.ndarray, pd.DataFrame]:
+    """Reorder beta and alpha SHAP matrices so feature order matches mean |SHAP| on AOD (beta)."""
+    order = np.argsort(-np.nanmean(np.abs(beta_vals), axis=0))
+    beta_cols = [beta_feat.columns[i] for i in order]
+    beta_vals = beta_vals[:, order]
+    beta_feat = beta_feat[beta_cols].copy()
+    extra = [c for c in alpha_feat.columns if c not in beta_cols]
+    alpha_cols = [c for c in beta_cols if c in alpha_feat.columns] + extra
+    idx = [alpha_feat.columns.get_loc(c) for c in alpha_cols]
+    alpha_vals = alpha_vals[:, idx]
+    alpha_feat = alpha_feat[alpha_cols].copy()
+    return beta_vals, beta_feat, alpha_vals, alpha_feat
+
+
+def plot_xai_summary_figure() -> plt.Figure:
+    import shap
+
+    alpha = _load_xai_long(SHAP_ALPHA)
+    alpha = alpha[alpha["sample_index"] != 64].copy()
+    beta = _load_xai_long(SHAP_BETA)
+    beta_vals, beta_feat = _xai_to_matrices(beta)
+    alpha_vals, alpha_feat = _xai_to_matrices(alpha)
+    beta_vals, beta_feat, alpha_vals, alpha_feat = _reorder_xai_by_aod_columns(
+        beta_vals, beta_feat, alpha_vals, alpha_feat
+    )
+
+    fig = plt.figure(figsize=(6.0, 3.2))
+    ax1 = fig.add_subplot(1, 2, 1)
+    ax2 = fig.add_subplot(1, 2, 2)
+    plt.rcParams.update({"font.size": _PT, "font.family": "serif", "font.serif": ["Times New Roman", "Times", "DejaVu Serif"]})
+
+    plt.sca(ax1)
+    shap.summary_plot(
+        beta_vals,
+        features=beta_feat,
+        feature_names=_xai_feature_display_names(list(beta_feat.columns)),
+        plot_type="dot",
+        alpha=0.75,
+        max_display=len(beta_feat.columns),
+        show=False,
+        plot_size=None,
+        color_bar=False,
+        cmap=WONG_FEATURE_CMAP,
+    )
+    ax1.set_title(r"AOD$_{550}$", fontsize=_PT)
+    ax1.set_xlim(*SHAP_AOD_XLIM)
+    ax1.tick_params(axis="both", labelsize=_PT)
+
+    plt.sca(ax2)
+    shap.summary_plot(
+        alpha_vals,
+        features=alpha_feat,
+        feature_names=_xai_feature_display_names(list(alpha_feat.columns)),
+        plot_type="dot",
+        alpha=0.75,
+        max_display=len(alpha_feat.columns),
+        show=False,
+        plot_size=None,
+        color_bar=True,
+        cmap=WONG_FEATURE_CMAP,
+    )
+    ax2.set_title(r"Ångström $\alpha$", fontsize=_PT)
+    ax2.tick_params(axis="both", labelsize=_PT)
+
+    fig.tight_layout(rect=(0, 0, 1, 0.98))
+    return fig
 
 
 def plot_oe_train_test_violin(df_long: pd.DataFrame, ann_df: pd.DataFrame):
@@ -309,48 +496,98 @@ def plot_oe_train_test_violin(df_long: pd.DataFrame, ann_df: pd.DataFrame):
         + geom_boxplot(width=0.12, outlier_alpha=0.15, fill="white", size=0.25)
         + geom_text(
             data=ann_df,
-            mapping=aes(x="dataset", y="y", label="label", color="dataset"),
+            mapping=aes(x="dataset", y="y", label="label"),
             inherit_aes=False,
-            size=6,
+            size=_PT,
             ha="left",
             va="top",
             lineheight=0.9,
+            color="black",
+            family="Times New Roman",
         )
-        + facet_grid("metric ~ variable", scales="free_y")
+        + facet_wrap("~ variable", nrow=2, ncol=1, scales="free_y")
         + scale_fill_manual(values=cmap)
         + scale_color_manual(values=cmap)
         + labs(
-            title="(a) OE train vs test errors vs AERONET: squared and fractional gross",
+            title="(a) Test errors vs AERONET: fractional gross error",
             x="Dataset",
-            y=f"log10(metric + {EPS_LOG:g})",
+            y="FGE",
         )
         + _theme_common()
     )
 
 
-def build_plot_collection(df_long: pd.DataFrame, ann_df: pd.DataFrame):
-    """Extensible registry for adding more plots later."""
-    return [
-        ("oe_train_test_violin", plot_oe_train_test_violin(df_long, ann_df), FIG_H_MM),
-        # Future additions can append tuples: (name, ggplot_obj, height_mm)
-    ]
+def plot_irradiance_scatter():
+    long_df, line_df, lo, hi = _load_irradiance_scatter_table()
+    colors = {"GHI": WONG_ORANGE, "BNI": WONG_BLUE, "DHI": WONG_GREEN}
+    return (
+        ggplot(long_df, aes(x="measured", y="forward", color="component"))
+        + geom_point(size=0.9, alpha=0.55, stroke=0)
+        + geom_line(
+            data=line_df,
+            mapping=aes(x="measured", y="forward", group="grp"),
+            inherit_aes=False,
+            linetype="dashed",
+            size=0.3,
+            color="black",
+            alpha=0.65,
+        )
+        + facet_wrap("~ panel", nrow=1, scales="fixed")
+        + scale_color_manual(values=colors, breaks=["GHI", "BNI", "DHI"], name="Irrad. comp.")
+        + coord_fixed(ratio=1, xlim=(lo, hi), ylim=(lo, hi), expand=False)
+        + labs(
+            title="(b) Test irradiance scatter: measured vs forward",
+            x=r"Measured (W m$^{-2}$)",
+            y=r"libRadtran forward (W m$^{-2}$)",
+        )
+        + _theme_common()
+    )
 
 
-def save_plots_pdf(plot_specs: list[tuple[str, object, float]], out_path: Path) -> None:
+def _figure_to_array(fig: plt.Figure) -> np.ndarray:
+    fig.canvas.draw()
+    # Robust extraction across backends/layout engines.
+    rgba = np.asarray(fig.canvas.buffer_rgba())
+    if rgba.ndim == 3 and rgba.shape[2] >= 3:
+        return rgba[:, :, :3].copy()
+    raise RuntimeError("Unexpected canvas buffer shape while rasterizing figure.")
+
+
+def build_composite_figure(df_long: pd.DataFrame, ann_df: pd.DataFrame) -> plt.Figure:
+    violin_fig = (plot_oe_train_test_violin(df_long, ann_df) + theme(figure_size=(5.6, 3.6))).draw()
+    shap_fig = plot_xai_summary_figure()
+    scatter_fig = (plot_irradiance_scatter() + theme(figure_size=(10.5, 3.2))).draw()
+
+    violin_img = _figure_to_array(violin_fig)
+    shap_img = _figure_to_array(shap_fig)
+    scatter_img = _figure_to_array(scatter_fig)
+    plt.close(violin_fig)
+    plt.close(shap_fig)
+    plt.close(scatter_fig)
+
+    out = plt.figure(figsize=(FIG_W_MM / 25.4, (FIG_H_MM * 1.9) / 25.4))
+    gs = GridSpec(2, 2, figure=out, height_ratios=[1.05, 1.0], width_ratios=[1.0, 2.0], hspace=0.08, wspace=0.05)
+    ax_tl = out.add_subplot(gs[0, 0])
+    ax_tr = out.add_subplot(gs[0, 1])
+    ax_b = out.add_subplot(gs[1, :])
+    for ax, img in ((ax_tl, violin_img), (ax_tr, shap_img), (ax_b, scatter_img)):
+        ax.imshow(img)
+        ax.axis("off")
+    return out
+
+
+def save_composite_pdf(fig: plt.Figure, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    w_in = FIG_W_MM / 25.4
     with PdfPages(str(out_path)) as pdf:
-        for _, p, h_mm in plot_specs:
-            fig = (p + theme(figure_size=(w_in, h_mm / 25.4))).draw()
-            fig.patch.set_facecolor("white")
-            pdf.savefig(fig, bbox_inches="tight", pad_inches=0.02, facecolor="white", edgecolor="none")
-            plt.close(fig)
+        fig.patch.set_facecolor("white")
+        pdf.savefig(fig, bbox_inches="tight", pad_inches=0.02, facecolor="white", edgecolor="none")
+    plt.close(fig)
 
 
 def main() -> None:
     df_long, ann_df = _load_long_error_table()
-    plots = build_plot_collection(df_long, ann_df)
-    save_plots_pdf(plots, OUTPUT_FIG)
+    fig = build_composite_figure(df_long, ann_df)
+    save_composite_pdf(fig, OUTPUT_FIG)
 
     # Export tidy table too (useful for custom R plotting)
     out_txt = OUTPUT_FIG.with_suffix(".txt")
