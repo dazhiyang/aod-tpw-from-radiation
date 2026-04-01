@@ -150,7 +150,12 @@ def metrics_vs_ref(o: np.ndarray, p: np.ndarray) -> dict[str, float]:
     mbe = float(np.mean(p - o))
     rmse = float(np.sqrt(np.mean((p - o) ** 2)))
     fb = float(2.0 * (mo - mp) / denom) if denom > 0 else float("nan")
-    fge = float(2.0 * np.mean(np.abs(o - p)) / denom) if denom > 0 else float("nan")
+    # Per-sample FGE definition (matches step-12): 2*|p-o|/(p+o), averaged on valid rows.
+    den_row = p + o
+    fge_row = np.full_like(p, np.nan, dtype=float)
+    m_fge = np.isfinite(den_row) & (den_row > 0.0)
+    fge_row[m_fge] = 2.0 * np.abs(p[m_fge] - o[m_fge]) / den_row[m_fge]
+    fge = float(np.nanmean(fge_row)) if np.any(np.isfinite(fge_row)) else float("nan")
     return {"n": float(len(o)), "mbe": mbe, "rmse": rmse, "fb": fb, "fge": fge}
 
 

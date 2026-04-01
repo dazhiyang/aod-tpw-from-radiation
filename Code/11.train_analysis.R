@@ -68,7 +68,7 @@ ret.ls.path  <- file.path(dir0, "Data", paste0(stn, "_", yr, "_train_ls", k.suff
 ret.oe.path  <- file.path(dir0, "Data", paste0(stn, "_", yr, "_train_oe", k.suffix, ".txt"))
 
 fig.name <- ifelse(use.tabpfn, "train_results_tabpfn.pdf", "train_results.pdf")
-fig.path <- Sys.getenv("OUTPUT_FIG", file.path(dir0, "tex", "figures", fig.name))
+fig.path <- Sys.getenv("OUTPUT_FIG", file.path(dir0, "tex", fig.name))
 
 fig.w.mm <- 160; fig.h.density.mm <- 45; fig.h.scatter.mm <- 62
 #################################################################################
@@ -83,12 +83,16 @@ metrics.vs.ref <- function(obs, mod) {
   obs <- obs[ok]; mod <- mod[ok]; n <- length(obs)
   if (n == 0) return(data.frame(n=0, mbe=NA, rmse=NA, fb=NA, fge=NA))
   mo <- mean(obs); mm <- mean(mod); denom <- mo + mm
+  den.row <- mod + obs
+  fge.row <- rep(NA_real_, n)
+  ok.fge <- is.finite(den.row) & (den.row > 0)
+  fge.row[ok.fge] <- 2 * abs(obs[ok.fge] - mod[ok.fge]) / den.row[ok.fge]
   data.frame(
     n    = n,
     mbe  = mean(mod - obs),
     rmse = sqrt(mean((mod - obs)^2)),
     fb   = ifelse(denom > 0, 2 * (mo - mm) / denom, NA),
-    fge  = ifelse(denom > 0, 2 * mean(abs(obs - mod)) / denom, NA)
+    fge  = ifelse(any(is.finite(fge.row)), mean(fge.row, na.rm = TRUE), NA)
   )
 }
 

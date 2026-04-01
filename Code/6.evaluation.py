@@ -88,6 +88,7 @@ REQUIRED_BASE = (
     "beta_pred_ls", "alpha_pred_ls", "beta_pred_oe", "alpha_pred_oe",
     "aeronet_aod550", "aeronet_alpha", "merra_TQV",
 )
+REQUIRED_AERONET = ("aeronet_aod550", "aeronet_alpha")
 # =============================================================================
 
 
@@ -195,7 +196,7 @@ def _load_merged_frame() -> pd.DataFrame:
     if "time_utc" not in pls.columns or "time_utc" not in poe.columns:
         print("ERROR: Both PRED_LS and PRED_OE must contain column 'time_utc'.", file=sys.stderr)
         sys.exit(1)
-    oe_cols = ["time_utc", "beta_pred_oe", "alpha_pred_oe"]
+    oe_cols = ["time_utc", "beta_pred_oe", "alpha_pred_oe", *REQUIRED_AERONET]
     missing_oe = [c for c in oe_cols if c not in poe.columns]
     if missing_oe:
         print(f"ERROR: PRED_OE missing columns: {missing_oe}", file=sys.stderr)
@@ -203,7 +204,21 @@ def _load_merged_frame() -> pd.DataFrame:
     for c in ("beta_pred_oe", "alpha_pred_oe"):
         if c in pls.columns:
             pls = pls.drop(columns=[c])
-    merged = pls.merge(poe[oe_cols], on="time_utc", how="inner")
+    # Keep LS as the base table and only append OE predictions + optional AERONET fallback.
+    merged = pls.merge(
+        poe[oe_cols],
+        on="time_utc",
+        how="inner",
+        suffixes=("", "_oe_src"),
+    )
+    for c in REQUIRED_AERONET:
+        oe_fallback = f"{c}_oe_src"
+        if c not in merged.columns and oe_fallback in merged.columns:
+            merged[c] = merged[oe_fallback]
+        elif c in merged.columns and oe_fallback in merged.columns:
+            merged[c] = merged[c].where(merged[c].notna(), merged[oe_fallback])
+        if oe_fallback in merged.columns:
+            merged = merged.drop(columns=[oe_fallback])
     if len(merged) == 0:
         print("ERROR: Inner merge on time_utc produced 0 rows.", file=sys.stderr)
         sys.exit(1)

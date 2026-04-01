@@ -21,7 +21,6 @@ from pathlib import Path
 if "LRT_SEASONAL_ATMOSPHERE" not in os.environ:
     os.environ["LRT_SEASONAL_ATMOSPHERE"] = "1"
 
-import numpy as np
 import pandas as pd
 
 try:
@@ -75,20 +74,15 @@ if _tqdm is not None:
 else:
     results = df.apply(_oe_fn, axis=1)
 
-# Drop input columns that are recomputed in process_row_oe (LHS copies of fluxes and
-# repeated MERRA scalars) so we do not duplicate column names after concat.
-_overlap = [c for c in results.columns if c in df.columns]
-df_base = df.drop(columns=_overlap, errors="ignore")
-out = pd.concat([df_base, results], axis=1)
-
-cols = [
-    "ghi", "bni", "dhi", "ghi_clear", "bni_clear", "dhi_clear",
-    "ghi_merra", "bni_merra", "dhi_merra",
-    "ghi_oe", "bni_oe", "dhi_oe", "beta_oe", "alpha_oe",
-    "merra_ALPHA", "merra_BETA", "merra_TO3", "merra_TQV", "merra_ALBEDO", "merra_PS", "zenith",
-]
-final_cols = [c for c in cols if c in out.columns]
-out.reset_index()[["time_utc"] + final_cols].to_csv(
+# Keep every column from the input table; overwrite overlapping MERRA/flux fields with
+# retrieval outputs and append new columns (e.g. beta_oe, alpha_oe, ghi_oe).
+_original = list(df.columns)
+out = df.copy()
+for col in results.columns:
+    out[col] = results[col]
+_extra = [c for c in results.columns if c not in df.columns]
+write_cols = ["time_utc"] + _original + _extra
+out.reset_index()[write_cols].to_csv(
     OUTPUT_DATA, sep="\t", index=False, float_format="%.8f"
 )
 

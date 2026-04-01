@@ -1,16 +1,14 @@
 """
-Scatter plots: one row — **MERRA-2**, **TabPFN (LS)**, **TabPFN (OE)**, and optionally **AERONET**.
+Scatter plots: one row — **MERRA-2**, **TabPFN (OE)**, and optionally **AERONET** (TabPFN **LS** off by default).
 
 If ``PLOT_INPUT_COMBINED`` / default ``Data/..._test_combined<suffix>.txt`` exists (output of combined
-``6.evaluation.py``), that single table is used. Otherwise loads ``test_ls`` + ``test_oe``; optional
-AERONET from ``PLOT_INPUT_AERONET`` / ``..._test_aeronet<suffix>.txt`` when present.
+``6.evaluation.py``), that single table is used. Otherwise loads ``test_oe`` (and ``test_ls`` only if
+plotting LS). Optional AERONET from ``PLOT_INPUT_AERONET`` / ``..._test_aeronet<suffix>.txt`` when present.
 
 Each panel overlays **GHI, BNI, DHI** (Wong colors) as measured vs libRadtran forward for that source.
 
-**SKIP_LS** — if ``1`` / ``true``, omit the TabPFN **(LS)** panel. With **separate** ``test_ls`` /
-``test_oe`` files, LS is also skipped when ``test_ls`` is **missing** (non-combined mode only).
-**Combined** ``test_combined*.txt`` includes ``*_ls`` columns; a separate ``test_ls`` file is **not**
-required — set ``SKIP_LS=1`` only if you want MERRA + OE (+ AERONET) without the LS panel.
+**SKIP_LS** — default **on** (omit TabPFN **(LS)**). Set ``SKIP_LS=0`` to include the LS panel when
+``test_ls`` / combined columns exist.
 
 Pooled statistics (GHI + BNI + DHI, all rows) per panel: MBE [W m⁻²], RMSE%, R².
 
@@ -112,18 +110,23 @@ need_aeronet = [
 
 
 def _skip_ls_explicit_only() -> bool:
-    """True only when ``SKIP_LS`` requests omitting the LS panel (used with combined input)."""
-    return os.environ.get("SKIP_LS", "").strip().lower() in ("1", "true", "yes")
+    """Omit LS panel unless ``SKIP_LS=0`` (default: skip LS; OE-focused)."""
+    v = os.environ.get("SKIP_LS", "").strip().lower()
+    if v in ("0", "false", "no"):
+        return False
+    if v in ("1", "true", "yes"):
+        return True
+    return True
 
 
 def _skip_ls() -> bool:
-    """Explicit ``SKIP_LS=1``, or auto when LS path is not a file (non-combined inputs)."""
+    """Default: skip LS (OE-focused). Set ``SKIP_LS=0`` to plot TabPFN (LS) when ``test_ls`` exists."""
     v = os.environ.get("SKIP_LS", "").strip().lower()
-    if v in ("1", "true", "yes"):
-        return True
     if v in ("0", "false", "no"):
         return False
-    return not INPUT_LS.is_file()
+    if v in ("1", "true", "yes"):
+        return True
+    return True
 
 def _load_sub(path: Path, columns: list[str]) -> pd.DataFrame | None:
     if not path.is_file():

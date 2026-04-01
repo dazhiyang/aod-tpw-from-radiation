@@ -5,10 +5,7 @@
 ``Data/<STATION>_<YEAR>_train_<MODE><suffix>.txt`` (same naming as ``4a`` / ``4b`` outputs from
 ``3.latin_hypercube`` LHS). **Test pool** defaults to ``Data/<STATION>_<YEAR>_testpool.txt`` (step 2).
 
-We always compute ``ghi_trans``, ``bni_trans``, ``dhi_trans`` (measured / REST2 clear-sky) so they
-are present in memory and written to the prediction file; TabPFN uses ``FEATURES`` below (measured
-flux + zenith + MERRA). To use transmittance-only inputs, set
-``FEATURES = [*_TRANS, "zenith", ...]``.
+TabPFN uses ``FEATURES`` below (measured flux + zenith + MERRA).
 
 **Overrides:** ``TRAIN_IN``, ``TEST_POOL``, ``PRED_OUT``, ``STATION``, ``YEAR``, ``LHS_N``, ``MODE``,
 ``N_TEST`` (env). For a legacy flat name like ``Data/train_ls_0.5k.txt``, set ``TRAIN_IN`` explicitly.
@@ -61,11 +58,9 @@ _DEFAULT_PRED = PROJECT / "Data" / f"{STATION}_{YEAR}_pred_{MODE}{_k_suffix}.txt
 PRED_OUT = Path(os.environ.get("PRED_OUT", str(_DEFAULT_PRED)))
 # =============================================================================
 
-_CLEAR = ("ghi_clear", "bni_clear", "dhi_clear")
-_TRANS = ("ghi_trans", "bni_trans", "dhi_trans")
 _MEAS = ("ghi", "bni", "dhi")
 
-# TabPFN input columns (change to ``*_TRANS`` instead of ``*_MEAS`` to use transmittance as features).
+# TabPFN input columns.
 FEATURES = [
     *_MEAS,
     "zenith",
@@ -73,15 +68,6 @@ FEATURES = [
     "merra_TO3", "merra_PS",
 ]
 TARGETS = [f"beta_{MODE}", f"alpha_{MODE}"]
-
-
-def _add_transmittance(df: pd.DataFrame) -> pd.DataFrame:
-    """Transmittance proxy: measured / REST2 clear-sky (e.g. ``ghi_trans`` = ghi/ghi_clear). Zenith ≤ 87°; no epsilon on the denominator."""
-    out = df.copy()
-    out["ghi_trans"] = out["ghi"] / out["ghi_clear"]
-    out["bni_trans"] = out["bni"] / out["bni_clear"]
-    out["dhi_trans"] = out["dhi"] / out["dhi_clear"]
-    return out
 
 
 # --- Execution Logic ---
@@ -97,19 +83,9 @@ else:
         f"(STATION={STATION}, YEAR={YEAR}, MODE={MODE}, LHS_N={LHS_N})"
     )
 train_df = pd.read_csv(TRAIN_IN, sep="\t")
-for c in _CLEAR:
-    if c not in train_df.columns:
-        print(f"ERROR: Missing column {c!r} in {TRAIN_IN}", file=sys.stderr)
-        sys.exit(1)
-train_df = _add_transmittance(train_df)
 
 print(f"Loading test pool: {TEST_POOL.name}")
 test_df = pd.read_csv(TEST_POOL, sep="\t", comment="#")
-for c in _CLEAR:
-    if c not in test_df.columns:
-        print(f"ERROR: Missing column {c!r} in {TEST_POOL}", file=sys.stderr)
-        sys.exit(1)
-test_df = _add_transmittance(test_df)
 train_df = train_df.replace([np.inf, -np.inf], np.nan)
 test_df = test_df.replace([np.inf, -np.inf], np.nan)
 

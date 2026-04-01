@@ -21,12 +21,13 @@ MERRA-2 reanalysis supplies prior/ancillary information (ozone, surface pressure
 | 5 | `5.tabpfn.py` | Trains TabPFN on LS or OE labels; run twice with `MODE=ls` and `MODE=oe` → `pred_ls*.txt`, `pred_oe*.txt`. |
 | 6 | `6.evaluation.py` | One pass per row: **MERRA explicit**, **TabPFN LS**, **TabPFN OE**, **AERONET** forwards (shared `merra_explicit_physics`). Merges `pred_ls` + `pred_oe` on `time_utc`; writes `test_combined*.txt`. Sets `LRT_SEASONAL_ATMOSPHERE=1` by default (same idea as 4a/4b). |
 | 7 | `7.retrieval_result.py` | AOD₅₅₀ / α densities and scatter vs AERONET (retrieval or `USE_TABPFN=1`); figures in `tex/figures/retrieval_result_distributions*.pdf`. |
+| 8 | `8.test_analysis.py` | **Test** set: **TabPFN OE** **Δτ₅₅₀** vs **solar zenith** heatmap from `test_combined*.txt`; default `tex/figures/<STATION>_<YEAR>_test_error_heatmap_oe*.pdf`. |
 
 ### Supporting scripts
 
 | Script | Purpose |
 |--------|---------|
-| `10.plot_retrieval_scatter.py` | Measured vs forward **GHI/BNI/DHI** scatters (MERRA, TabPFN LS, TabPFN OE, optional AERONET). Prefers `test_combined*.txt` when present; `SKIP_LS=1` omits the LS panel. |
+| `10.plot_retrieval_scatter.py` | Measured vs forward **GHI/BNI/DHI** scatters (MERRA, TabPFN **OE**, optional AERONET). Prefers `test_combined*.txt`; **LS panel off by default** — set `SKIP_LS=0` to include TabPFN LS. |
 
 **Legacy / archive:** older one-off scripts live under `Code/old/` (including former `7`–`9` analysis scripts moved out of the main numbered path).
 
@@ -40,6 +41,7 @@ Raw BSRN + MERRA-2 (+ AERONET for PAL/TAT)
                                 └─[4a/4b]─► train_ls_{N}k.txt, train_oe_{N}k.txt  (retrieved β, α)
                                           └─[5]─► pred_ls_{N}k.txt, pred_oe_{N}k.txt  (TabPFN β, α on test pool)
                                                     └─[6]─► test_combined_{N}k.txt  (forward fluxes: MERRA, LS, OE, AERONET)
+                                                              └─[8]─► optional Δτ₅₅₀ vs zenith heatmap (test diagnostics)
 ```
 
 ## Core library
@@ -117,6 +119,8 @@ MODE=oe $PY Code/5.tabpfn.py
 $PY Code/6.evaluation.py
 $PY Code/7.retrieval_result.py
 # TabPFN figures: USE_TABPFN=1 $PY Code/7.retrieval_result.py
+$PY Code/8.test_analysis.py
+# Optional: TEST_COMBINED=Data/PAL_2024_test_combined_0.5k.txt $PY Code/8.test_analysis.py
 # Scatter plot: $PY Code/10.plot_retrieval_scatter.py
 ```
 
@@ -141,7 +145,7 @@ $PY Code/7.retrieval_result.py
 | `PLOT_INPUT_COMBINED` | 10 | `Data/..._test_combined<suffix>.txt` | Optional; defaults to combined step-6 output for scatter plots. |
 | `N_TEST` | 5 | `5000` | Number of test rows to predict. |
 | `LIBRADTRANDIR` | lib | `~/libRadtran-2.0.6` | Path to libRadtran installation. |
-| `SKIP_LS` | 10 | *(off)* | Set `1` to omit TabPFN (LS) panel in scatter plot. |
+| `SKIP_LS` | 10 | `1` (omit LS) | Set `0` to **show** TabPFN (LS) panel; default omits LS (OE-focused). |
 
 ## License
 
