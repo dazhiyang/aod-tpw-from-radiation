@@ -515,8 +515,8 @@ def retrieve_one_row_ls(
     if row_skip_ls(row):
         return np.nan, np.nan, False, None
 
-    alpha_m, o3_du_m, beta0, w_m = merra_explicit_physics(row, config)
-    x0 = np.array([beta0, alpha_m], dtype=float)
+    alpha_m, o3_du_m, beta_m, w_m = merra_explicit_physics(row, config)
+    x0 = np.array([beta_m, alpha_m], dtype=float)
     bounds = (np.array([BETA_MIN, ALPHA_MIN]), np.array([BETA_MAX, ALPHA_MAX]))
     diff_step = np.array([DIFF_STEP_BETA, DIFF_STEP_ALPHA])
 
@@ -657,9 +657,9 @@ def retrieve_one_row_oe(
     if row_skip_ls(row):
         return np.nan, np.nan, False, None
 
-    alpha_m, o3_du_m, beta0, w_m = merra_explicit_physics(row, config)
+    alpha_m, o3_du_m, beta_m, w_m = merra_explicit_physics(row, config)
 
-    x_prior = np.array([beta0, alpha_m], dtype=float)
+    x_prior = np.array([beta_m, alpha_m], dtype=float)
 
     # Dynamic measurement uncertainties (BNI + DHI only)
     bni_meas = float(row["bni"])
@@ -669,13 +669,13 @@ def retrieve_one_row_oe(
     y_err = np.array([bni_err, dhi_err], dtype=float)
 
     # Dynamic prior uncertainties
-    # Aerosol turbidity: ~30% relative (MERRA-2 vs AERONET), floor 0.01
-    beta_err = max(0.20 * beta0, 0.01)
+    # Aerosol turbidity: ~20% relative (MERRA-2 vs AERONET), floor 0.01
+    beta_err = max(0.20 * beta_m, 0.01)
     # Ångström alpha: ~15% relative (MERRA-2 vs AERONET), floor 0.05
     alpha_err = max(0.15 * alpha_m, 0.05)
     x_err = np.array([beta_err, alpha_err], dtype=float)
 
-    x0 = np.array([beta0, alpha_m], dtype=float)
+    x0 = np.array([beta_m, alpha_m], dtype=float)
     bounds = (np.array([BETA_MIN, ALPHA_MIN]), np.array([BETA_MAX, ALPHA_MAX]))
     diff_step = np.array([DIFF_STEP_BETA, DIFF_STEP_ALPHA])
 
