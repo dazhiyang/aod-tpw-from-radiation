@@ -41,7 +41,7 @@ These scripts assume the same `STATION`, `YEAR`, `LHS_N` / `_0.5k` naming as abo
 | `11.train_analysis.py` | Train-side densities and AOD₅₅₀ / Ångström α scatters: physical **LS/OE** retrievals or `USE_TABPFN=1` with `pred_ls` + `pred_oe`. |
 | `11.train_analysis.R` | R counterpart for train figures (match styling with step 11 Python if desired). |
 | `12.test_analysis.py` | Composite **test** PDF: FGE violins, SHAP summaries, irradiance scatter (matplotlib + plotnine). Defaults: `pred_oe`, `train_oe`, SHAP files, `test_irradiance`. |
-| `12.test_analysis.R` | R **patchwork** composite for the same story (e.g. `scattermore` on irradiance panel). |
+| `12.test_analysis.R` | R **patchwork** composite for the same story (e.g. `scattermore` on irradiance panel). Uses **`TEST_OE`** like the Python script when `test_oe.txt` exists. |
 
 **Note:** Older workflows used a bundled `6.evaluation.py` that wrote `test_combined*.txt` and a separate `7.retrieval_result.py`. Those files are **not** in this repository anymore. Use **`pred_ls` / `pred_oe`** from step 5, **`7.irradiance.py`** for flux validation, and **`12.test_analysis`** for the combined test figure.
 
@@ -178,7 +178,8 @@ MODE=oe $PY Code/5.tabpfn.py
 | `VAL_OUT` | 7 | Default `test_irradiance<suffix>.txt` |
 | `PRED_IN` | 7 | Single-table override instead of `PRED_OE` |
 | `USE_TABPFN` | 11 | `1` = use `pred_ls` + `pred_oe` |
-| `TEST_COMBINED`, `TRAIN_OE`, `SHAP_*`, `IRRADIANCE_IN`, `OUTPUT_FIG` | 12 | See `12.test_analysis.py` / `.R` headers |
+| `TEST_COMBINED`, `TRAIN_OE`, `TEST_OE`, `SHAP_*`, `IRRADIANCE_IN`, `OUTPUT_FIG` | 12 | See `12.test_analysis.py` / `.R` headers. **`TEST_OE`** default `test_oe.txt` (step **8**); if missing, violin uses MERRA + TabPFN only. |
+| `EXPORT_DPI`, `EXPORT_PNG` | 12 | Default **300** dpi for rasterizing panels + PDF/PNG; set **`EXPORT_PNG=0`** to skip sibling `.png`. |
 | `LIBRADTRANDIR` | lib | `~/libRadtran-2.0.6` |
 
 ## License

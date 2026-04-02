@@ -1,7 +1,7 @@
 #################################################################################
 # 12.test_analysis.R
 # Composite test figure:
-#   top-left  : FGE violin (MERRA-2 vs TabPFN)
+#   top-left  : FGE violin (MERRA-2, TabPFN; plus libRadtran OE if TEST_OE exists)
 #   top-right : SHAP summary-style panel (AOD550 + alpha)
 #   bottom    : irradiance scatter (MERRA-2, TabPFN, AERONET)
 #
@@ -35,6 +35,7 @@ lhs.n <- as.integer(Sys.getenv("LHS_N", "500"))
 k.suffix <- ifelse(lhs.n == 500, "_0.5k", ifelse(lhs.n >= 1000, paste0("_", lhs.n/1000, "k"), paste0("_", lhs.n)))
 
 pred.oe.path <- Sys.getenv("TEST_COMBINED", file.path(dir0, "Data", paste0(stn, "_", yr, "_pred_oe", k.suffix, ".txt")))
+test.oe.path <- Sys.getenv("TEST_OE", file.path(dir0, "Data", paste0(stn, "_", yr, "_test_oe.txt")))
 train.oe.path <- Sys.getenv("TRAIN_OE", file.path(dir0, "Data", paste0(stn, "_", yr, "_train_oe", k.suffix, ".txt")))
 irr.path <- Sys.getenv("IRRADIANCE_IN", file.path(dir0, "Data", paste0(stn, "_", yr, "_test_irradiance", k.suffix, ".txt")))
 shap.a.path <- Sys.getenv("SHAP_ALPHA", file.path(dir0, "Data", paste0(stn, "_", yr, "_shap_oe_alpha", k.suffix, ".txt")))
@@ -45,7 +46,7 @@ plot.size <- 9
 line.size <- 0.3
 point.size <- 0.9
 fig.w.mm <- as.numeric(Sys.getenv("FIG_W_MM", "160"))
-fig.h.mm <- as.numeric(Sys.getenv("FIG_H_MM", "120"))
+fig.h.mm <- as.numeric(Sys.getenv("FIG_H_MM", "160"))
 aod.shap.xlim <- c(-0.52, 0.52)
 
 lam550 <- 0.55
@@ -53,11 +54,13 @@ lambda.ref <- as.numeric(Sys.getenv("ANGSTROM_BETA_REF_UM", "1.0"))
 aod550 <- function(beta, alpha) beta * (lam550 / lambda.ref)^(-alpha)
 
 col.merra <- "#E69F00"
-col.tabpfn <- "#56B4E9"
-col.dhi <- "#009E73"
+col.sky <- "#56B4E9"     # Wong sky blue — BNI in (c) scatter + SHAP colour bar (unchanged)
+col.tabpfn <- "#CC79A7"  # Wong reddish purple — TabPFN in (a) violin only
+col.librt <- "#009E73"   # Wong bluish green — libRadtran OE in (a) violin
+col.dhi <- "#009E73"     # DHI in (c) scatter
 src.colors <- c("MERRA-2" = col.merra, "TabPFN" = col.tabpfn, "AERONET" = "black")
-comp.colors <- c("GHI" = col.merra, "BNI" = col.tabpfn, "DHI" = col.dhi)
-shap.cmap <- c(col.tabpfn, "#F2F2F2", col.merra)
+comp.colors <- c("GHI" = col.merra, "BNI" = col.sky, "DHI" = col.dhi)
+shap.cmap <- c(col.sky, "#F2F2F2", col.merra)
 
 theme.common <- theme_bw(base_size = plot.size, base_family = "serif") +
   theme(
@@ -114,31 +117,68 @@ irr <- read.delim(irr.path, sep = "\t", comment.char = "#")
 shap.a <- read.delim(shap.a.path, sep = "\t", comment.char = "#")
 shap.b <- read.delim(shap.b.path, sep = "\t", comment.char = "#")
 
+has.test.oe <- file.exists(test.oe.path)
+if (has.test.oe) {
+  ts <- read.delim(test.oe.path, sep = "\t", comment.char = "#")
+  te <- dplyr::inner_join(
+    te,
+    dplyr::select(ts, time_utc, beta_oe, alpha_oe),
+    by = "time_utc"
+  )
+  if (nrow(te) == 0) stop("No overlapping time_utc between pred OE and TEST_OE")
+  te$aod_phys <- aod550(te$beta_oe, te$alpha_oe)
+} else {
+  message("Note: TEST_OE not found (", test.oe.path, "); violin shows MERRA-2 and TabPFN only.")
+}
+
 te$aod_oe <- aod550(te$beta_pred_oe, te$alpha_pred_oe)
 te$aod_merra <- aod550(te$merra_BETA, te$merra_ALPHA)
 
-fge.df <- bind_rows(
+ds.levels <- if (has.test.oe) c("MERRA-2", "TabPFN", "libRadtran OE") else c("MERRA-2", "TabPFN")
+fge.parts <- list(
   data.frame(dataset = "MERRA-2", variable = "AOD[550]", value = fge.vec(te$aod_merra, te$aeronet_aod550)),
   data.frame(dataset = "TabPFN", variable = "AOD[550]", value = fge.vec(te$aod_oe, te$aeronet_aod550)),
   data.frame(dataset = "MERRA-2", variable = "Angstrom~alpha", value = fge.vec(te$merra_ALPHA, te$aeronet_alpha)),
   data.frame(dataset = "TabPFN", variable = "Angstrom~alpha", value = fge.vec(te$alpha_pred_oe, te$aeronet_alpha))
-) %>% filter(is.finite(value))
-fge.df$dataset <- factor(fge.df$dataset, levels = c("MERRA-2", "TabPFN"))
+)
+if (has.test.oe) {
+  fge.parts <- c(
+    fge.parts,
+    list(
+      data.frame(dataset = "libRadtran OE", variable = "AOD[550]", value = fge.vec(te$aod_phys, te$aeronet_aod550)),
+      data.frame(dataset = "libRadtran OE", variable = "Angstrom~alpha", value = fge.vec(te$alpha_oe, te$aeronet_alpha))
+    )
+  )
+}
+fge.df <- dplyr::bind_rows(fge.parts) %>% filter(is.finite(value))
+fge.df$dataset <- factor(fge.df$dataset, levels = ds.levels)
 fge.df$variable <- factor(fge.df$variable, levels = c("AOD[550]", "Angstrom~alpha"))
 
-ann <- bind_rows(
-  metrics(te$aod_merra, te$aeronet_aod550) %>% mutate(dataset="MERRA-2", variable="AOD[550]"),
-  metrics(te$aod_oe, te$aeronet_aod550) %>% mutate(dataset="TabPFN", variable="AOD[550]"),
-  metrics(te$merra_ALPHA, te$aeronet_alpha) %>% mutate(dataset="MERRA-2", variable="Angstrom~alpha"),
-  metrics(te$alpha_pred_oe, te$aeronet_alpha) %>% mutate(dataset="TabPFN", variable="Angstrom~alpha")
+ann.parts <- list(
+  metrics(te$aod_merra, te$aeronet_aod550) %>% mutate(dataset = "MERRA-2", variable = "AOD[550]"),
+  metrics(te$aod_oe, te$aeronet_aod550) %>% mutate(dataset = "TabPFN", variable = "AOD[550]"),
+  metrics(te$merra_ALPHA, te$aeronet_alpha) %>% mutate(dataset = "MERRA-2", variable = "Angstrom~alpha"),
+  metrics(te$alpha_pred_oe, te$aeronet_alpha) %>% mutate(dataset = "TabPFN", variable = "Angstrom~alpha")
 )
-ann$label <- sprintf("n=%d\nMBE=%.4f\nRMSE=%.4f\nFB=%.4f\nFGE=%.4f", ann$n, ann$mbe, ann$rmse, ann$fb, ann$fge)
+if (has.test.oe) {
+  ann.parts <- c(
+    ann.parts,
+    list(
+      metrics(te$aod_phys, te$aeronet_aod550) %>% mutate(dataset = "libRadtran OE", variable = "AOD[550]"),
+      metrics(te$alpha_oe, te$aeronet_alpha) %>% mutate(dataset = "libRadtran OE", variable = "Angstrom~alpha")
+    )
+  )
+}
+ann <- dplyr::bind_rows(ann.parts)
+ann$label <- sprintf("MBE=%.4f\nRMSE=%.4f\nFB=%.4f\nFGE=%.4f", ann$mbe, ann$rmse, ann$fb, ann$fge)
 ann$y <- as.numeric(Sys.getenv("ANNOT_Y", "1.5"))
-ann$dataset <- factor(ann$dataset, levels = c("MERRA-2", "TabPFN"))
+ann$dataset <- factor(ann$dataset, levels = ds.levels)
 ann$variable <- factor(ann$variable, levels = c("AOD[550]", "Angstrom~alpha"))
-# Reduce overlap in narrow panel: push annotation blocks to left/right margins.
-ann$xpos <- ifelse(ann$dataset == "MERRA-2", 0.50, 1.50)
+ann$xpos <- as.numeric(ann$dataset) - 0.42
 ann$hjust <- 0
+
+fill.cols <- c("MERRA-2" = col.merra, "TabPFN" = col.tabpfn)
+if (has.test.oe) fill.cols <- c(fill.cols, "libRadtran OE" = col.librt)
 
 p.violin <- ggplot(fge.df, aes(x = dataset, y = value, fill = dataset, colour = dataset)) +
   geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.35, colour = "#4d4d4d") +
@@ -148,8 +188,8 @@ p.violin <- ggplot(fge.df, aes(x = dataset, y = value, fill = dataset, colour = 
             hjust = 0,
             vjust = 1, lineheight = 0.9, size = plot.size / .pt, colour = "black") +
   facet_wrap(~ variable, nrow = 2, ncol = 1, scales = "free_y", labeller = label_parsed) +
-  scale_fill_manual(values = c("MERRA-2" = col.merra, "TabPFN" = col.tabpfn)) +
-  scale_colour_manual(values = c("MERRA-2" = col.merra, "TabPFN" = col.tabpfn)) +
+  scale_fill_manual(values = fill.cols) +
+  scale_colour_manual(values = fill.cols) +
   labs(title = "(a) FGE", x = "Dataset", y = "FGE") +
   theme.common +
   theme(
@@ -240,8 +280,8 @@ for (pnl in levels(irr.long$panel)) {
   for (cmp in levels(irr.long$component)) {
     s <- irr.long %>% filter(panel == pnl, component == cmp)
     e <- s$forward - s$measured
-    cat(sprintf("%s %s: n=%d, MBE=%.3f W m^-2, RMSE=%.3f W m^-2\n",
-                pnl, cmp, length(e), mean(e), sqrt(mean(e^2))))
+    cat(sprintf("%s %s: MBE=%.3f W m^-2, RMSE=%.3f W m^-2\n",
+                pnl, cmp, mean(e), sqrt(mean(e^2))))
   }
 }
 
@@ -293,14 +333,14 @@ p.irr <- ggplot(irr.long, aes(x = measured, y = forward, colour = component)) +
 
 layout.design <- "
 AB
-AC
+CC
 "
 all.fig <- (
   p.violin + p.shap + p.irr +
     plot_layout(
       design = layout.design,
-      widths = c(1, 2),
-      heights = c(1.4, 1)
+      widths = c(1, 1),
+      heights = c(1.5, 1)
     )
 ) & theme(plot.margin = margin(2, 2, 2, 2, "pt"))
 

@@ -3,15 +3,20 @@
 
 First plot implemented:
 - Violin comparison of **bias error** and **fractional error** for OE-only
-- Variables: ``beta`` and ``alpha``
-- Dataset:
-  - Test OE prediction table: ``Data/<STATION>_<YEAR>_pred_oe<suffix>.txt``
-  - Train OE retrieval table: ``Data/<STATION>_<YEAR>_train_oe<suffix>.txt`` (for FGE % diagnostics)
+- Variables: AOD$_{550}$ and Ångström $\\alpha$ (from $\\beta$, $\\alpha$).
+- Datasets:
+  - Test TabPFN table: ``Data/<STATION>_<YEAR>_pred_oe<suffix>.txt`` (default ``TEST_COMBINED``).
+  - Optional physical OE on the test pool: ``Data/<STATION>_<YEAR>_test_oe.txt`` (``8.retrieval_oe_test.py``);
+    merged with the TabPFN table on ``time_utc`` so violins share the same rows.
+  - Train OE retrieval: ``Data/<STATION>_<YEAR>_train_oe<suffix>.txt`` (``TRAIN_OE``) for printed FGE diagnostics.
 
 Error definition (reference = **AERONET**):
 - fractional gross error: ``2*abs(pred - ref)/(pred + ref)``  (NaN where ``pred + ref <= 0``)
 
 Plot styling matches ``11.train_analysis.R`` (9 pt, Times New Roman, 160 mm width).
+
+**Export:** ``EXPORT_DPI`` (default **300**) controls plotnine/SHAP rasterization and the final PDF/PNG.
+A sibling ``.png`` is written next to ``OUTPUT_FIG`` unless ``EXPORT_PNG=0``.
 
 This script is structured to allow adding more plot builders, similar to step 11.
 """
@@ -65,6 +70,7 @@ TEST_COMBINED = Path(
     os.environ.get("TEST_COMBINED", str(PROJECT / "Data" / f"{STATION}_{YEAR}_pred_oe{_k_suffix}.txt"))
 )
 TRAIN_OE = Path(os.environ.get("TRAIN_OE", str(PROJECT / "Data" / f"{STATION}_{YEAR}_train_oe{_k_suffix}.txt")))
+TEST_OE = Path(os.environ.get("TEST_OE", str(PROJECT / "Data" / f"{STATION}_{YEAR}_test_oe.txt")))
 SHAP_ALPHA = Path(os.environ.get("SHAP_ALPHA", str(PROJECT / "Data" / f"{STATION}_{YEAR}_shap_oe_alpha{_k_suffix}.txt")))
 SHAP_BETA = Path(os.environ.get("SHAP_BETA", str(PROJECT / "Data" / f"{STATION}_{YEAR}_shap_oe_beta{_k_suffix}.txt")))
 IRRADIANCE_IN = Path(
@@ -81,6 +87,10 @@ OUTPUT_FIG = Path(
 FIG_W_MM = float(os.environ.get("FIG_W_MM", "160"))
 FIG_H_MM = float(os.environ.get("FIG_H_MM", "95"))
 
+# Raster DPI for plotnine→array panels and for final PDF/PNG (default 300 for print).
+EXPORT_DPI = float(os.environ.get("EXPORT_DPI", "300"))
+_EXPORT_PNG = os.environ.get("EXPORT_PNG", "1").strip().lower() not in ("0", "false", "no")
+
 # Match ``11.train_analysis.R`` (plot.size <- 9).
 _PT = 9
 _LW = 0.3
@@ -88,18 +98,16 @@ ANNOT_Y = 1.5
 # AOD SHAP summary plot x-axis limits (matches 12.test_analysis.R).
 SHAP_AOD_XLIM = (-0.52, 0.52)
 WONG_ORANGE = "#E69F00"  # MERRA-2
-WONG_BLUE = "#56B4E9"    # TabPFN OE (test)
-WONG_GREEN = "#009E73"   # DHI
+WONG_BLUE = "#56B4E9"    # BNI scatter; SHAP feature gradient (unchanged)
+WONG_PURPLE = "#CC79A7"  # TabPFN in (a) violin only
+WONG_GREEN = "#009E73"  # libRadtran OE violin; DHI scatter
 WONG_FEATURE_CMAP = LinearSegmentedColormap.from_list(
     "wong_blue_light_orange",
     [WONG_BLUE, "#F2F2F2", WONG_ORANGE],
 )
 
-DATASET_ORDER = [
-    "MERRA-2",
-    "TabPFN",
-]
-DATASET_COLORS = [WONG_ORANGE, WONG_BLUE]
+# Violin: MERRA-2, TabPFN (purple), optional libRadtran OE (green). Scatter colours unchanged.
+_DATASET_PALETTE = [WONG_ORANGE, WONG_PURPLE, WONG_GREEN]
 
 XAI_FEATURE_LABELS: dict[str, str] = {
     "ghi": r"$G_h$",
@@ -128,14 +136,14 @@ def _aod550_from_beta_alpha(beta: np.ndarray, alpha: np.ndarray) -> np.ndarray:
     return beta * (LAM550_UM / LAMBDA_REF_UM) ** (-alpha)
 
 
-def _load_long_error_table() -> tuple[pd.DataFrame, pd.DataFrame]:
+def _load_long_error_table() -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     if not TEST_COMBINED.is_file():
         raise SystemExit(f"Missing TEST_COMBINED: {TEST_COMBINED}")
     if not TRAIN_OE.is_file():
         raise SystemExit(f"Missing TRAIN_OE: {TRAIN_OE}")
 
-    te = pd.read_csv(TEST_COMBINED, sep="\t", parse_dates=["time_utc"])
-    tr = pd.read_csv(TRAIN_OE, sep="\t", parse_dates=["time_utc"])
+    te = pd.read_csv(TEST_COMBINED, sep="\t", comment="#", parse_dates=["time_utc"])
+    tr = pd.read_csv(TRAIN_OE, sep="\t", comment="#", parse_dates=["time_utc"])
 
     _validate_columns(
         te,
@@ -148,15 +156,46 @@ def _load_long_error_table() -> tuple[pd.DataFrame, pd.DataFrame]:
         TRAIN_OE,
     )
 
-    # AOD_550 + alpha representations
+    has_test_oe = TEST_OE.is_file()
+    if has_test_oe:
+        ts = pd.read_csv(TEST_OE, sep="\t", comment="#", parse_dates=["time_utc"])
+        _validate_columns(ts, ["time_utc", "beta_oe", "alpha_oe"], TEST_OE)
+        te_work = te.merge(
+            ts[["time_utc", "beta_oe", "alpha_oe"]],
+            on="time_utc",
+            how="inner",
+        )
+        if len(te_work) == 0:
+            raise SystemExit(
+                f"No overlapping time_utc between TEST_COMBINED ({TEST_COMBINED.name}) and TEST_OE ({TEST_OE.name})."
+            )
+        if len(te_work) < len(te):
+            print(
+                f"Note: violin test rows = {len(te_work)} (inner join TEST_OE); "
+                f"pred table had {len(te)} rows."
+            )
+    else:
+        te_work = te
+        print(f"Note: {TEST_OE.name} not found; violin omits libRadtran OE (set TEST_OE or run 8.retrieval_oe_test.py).")
+
+    # AOD_550 + alpha representations (test rows aligned when TEST_OE is used)
     te_aod_oe = _aod550_from_beta_alpha(
-        te["beta_pred_oe"].to_numpy(dtype=float), te["alpha_pred_oe"].to_numpy(dtype=float)
+        te_work["beta_pred_oe"].to_numpy(dtype=float), te_work["alpha_pred_oe"].to_numpy(dtype=float)
     )
-    te_alpha_oe = te["alpha_pred_oe"].to_numpy(dtype=float)
-    te_aod_merra = _aod550_from_beta_alpha(te["merra_BETA"].to_numpy(dtype=float), te["merra_ALPHA"].to_numpy(dtype=float))
-    te_alpha_merra = te["merra_ALPHA"].to_numpy(dtype=float)
-    te_aod_ae = te["aeronet_aod550"].to_numpy(dtype=float)
-    te_alpha_ae = te["aeronet_alpha"].to_numpy(dtype=float)
+    te_alpha_oe = te_work["alpha_pred_oe"].to_numpy(dtype=float)
+    te_aod_merra = _aod550_from_beta_alpha(
+        te_work["merra_BETA"].to_numpy(dtype=float), te_work["merra_ALPHA"].to_numpy(dtype=float)
+    )
+    te_alpha_merra = te_work["merra_ALPHA"].to_numpy(dtype=float)
+    te_aod_ae = te_work["aeronet_aod550"].to_numpy(dtype=float)
+    te_alpha_ae = te_work["aeronet_alpha"].to_numpy(dtype=float)
+    if has_test_oe:
+        te_aod_phys = _aod550_from_beta_alpha(
+            te_work["beta_oe"].to_numpy(dtype=float), te_work["alpha_oe"].to_numpy(dtype=float)
+        )
+        te_alpha_phys = te_work["alpha_oe"].to_numpy(dtype=float)
+    else:
+        te_aod_phys = te_alpha_phys = np.array([])
     tr_aod_oe = _aod550_from_beta_alpha(tr["beta_oe"].to_numpy(dtype=float), tr["alpha_oe"].to_numpy(dtype=float))
     tr_alpha_oe = tr["alpha_oe"].to_numpy(dtype=float)
     tr_aod_merra = _aod550_from_beta_alpha(tr["merra_BETA"].to_numpy(dtype=float), tr["merra_ALPHA"].to_numpy(dtype=float))
@@ -209,6 +248,16 @@ def _load_long_error_table() -> tuple[pd.DataFrame, pd.DataFrame]:
     imp_train_oe_vs_merra_aod = _pct_improve(fge_train_oe_aod, fge_train_merra_aod)
     imp_train_oe_vs_merra_alpha = _pct_improve(fge_train_oe_alpha, fge_train_merra_alpha)
 
+    if has_test_oe:
+        _, _, _, fge_test_phys_aod, n_phys_aod = _summary_metrics(te_aod_phys, te_aod_ae)
+        _, _, _, fge_test_phys_alpha, n_phys_alpha = _summary_metrics(te_alpha_phys, te_alpha_ae)
+        imp_test_phys_vs_merra_aod = _pct_improve(fge_test_phys_aod, fge_test_merra_aod)
+        imp_test_phys_vs_merra_alpha = _pct_improve(fge_test_phys_alpha, fge_test_merra_alpha)
+    else:
+        fge_test_phys_aod = fge_test_phys_alpha = float("nan")
+        n_phys_aod = n_phys_alpha = 0
+        imp_test_phys_vs_merra_aod = imp_test_phys_vs_merra_alpha = float("nan")
+
     print("\n=== FGE % improvement diagnostics (positive = lower FGE) ===")
     print(
         f"TEST  AOD_550: TabPFN vs MERRA-2 = {imp_test_tabpfn_vs_merra_aod:+.2f}%  "
@@ -218,6 +267,15 @@ def _load_long_error_table() -> tuple[pd.DataFrame, pd.DataFrame]:
         f"TEST  alpha  : TabPFN vs MERRA-2 = {imp_test_tabpfn_vs_merra_alpha:+.2f}%  "
         f"(n={n_test_alpha}, FGE_tabpfn={fge_test_tabpfn_alpha:.6f}, FGE_merra={fge_test_merra_alpha:.6f})"
     )
+    if has_test_oe:
+        print(
+            f"TEST  AOD_550: libRadtran OE vs MERRA-2 = {imp_test_phys_vs_merra_aod:+.2f}%  "
+            f"(n={n_phys_aod}, FGE_oe={fge_test_phys_aod:.6f}, FGE_merra={fge_test_merra_aod:.6f})"
+        )
+        print(
+            f"TEST  alpha  : libRadtran OE vs MERRA-2 = {imp_test_phys_vs_merra_alpha:+.2f}%  "
+            f"(n={n_phys_alpha}, FGE_oe={fge_test_phys_alpha:.6f}, FGE_merra={fge_test_merra_alpha:.6f})"
+        )
     print(
         f"TRAIN AOD_550: OE retrieval vs MERRA-2 = {imp_train_oe_vs_merra_aod:+.2f}%  "
         f"(n={n_train_aod}, FGE_oe={fge_train_oe_aod:.6f}, FGE_merra={fge_train_merra_aod:.6f})"
@@ -227,12 +285,19 @@ def _load_long_error_table() -> tuple[pd.DataFrame, pd.DataFrame]:
         f"(n={n_train_alpha}, FGE_oe={fge_train_oe_alpha:.6f}, FGE_merra={fge_train_merra_alpha:.6f})"
     )
 
+    dataset_order = ["MERRA-2", "TabPFN"]
+    test_rows: list[tuple[str, np.ndarray, np.ndarray]] = [
+        ("MERRA-2", te_aod_merra, te_alpha_merra),
+        ("TabPFN", te_aod_oe, te_alpha_oe),
+    ]
+    if has_test_oe:
+        dataset_order.append("libRadtran OE")
+        test_rows.append(("libRadtran OE", te_aod_phys, te_alpha_phys))
+
     blocks: list[pd.DataFrame] = []
     stat_rows: list[dict] = []
-    for dataset, pred_aod, pred_alpha, ref_aod, ref_alpha in (
-        ("MERRA-2", te_aod_merra, te_alpha_merra, te_aod_ae, te_alpha_ae),
-        ("TabPFN", te_aod_oe, te_alpha_oe, te_aod_ae, te_alpha_ae),
-    ):
+    for dataset, pred_aod, pred_alpha in test_rows:
+        ref_aod, ref_alpha = te_aod_ae, te_alpha_ae
         mbe_b, rmse_b, fb_b, fge_b, n_b = _summary_metrics(pred_aod, ref_aod)
         mbe_a, rmse_a, fb_a, fge_a, n_a = _summary_metrics(pred_alpha, ref_alpha)
         print(f"{dataset} AOD_550: n={n_b}, MBE={mbe_b:.6f}, RMSE={rmse_b:.6f}, FB={fb_b:.6f}, FGE={fge_b:.6f}")
@@ -283,7 +348,7 @@ def _load_long_error_table() -> tuple[pd.DataFrame, pd.DataFrame]:
     long_df = pd.concat(blocks, ignore_index=True)
     long_df = long_df.replace([np.inf, -np.inf], np.nan).dropna(subset=["value"]).copy()
     metric_fge = "Fractional gross error"
-    long_df["dataset"] = pd.Categorical(long_df["dataset"], categories=DATASET_ORDER, ordered=True)
+    long_df["dataset"] = pd.Categorical(long_df["dataset"], categories=dataset_order, ordered=True)
     long_df["variable"] = pd.Categorical(
         long_df["variable"],
         categories=[r"AOD$_{550}$", r"Ångström $\alpha$"],
@@ -297,14 +362,14 @@ def _load_long_error_table() -> tuple[pd.DataFrame, pd.DataFrame]:
     ann_df = pd.DataFrame(stat_rows)
     # Fixed y-position (not relative to violin/data spread).
     ann_df["y"] = ANNOT_Y
-    ann_df["dataset"] = pd.Categorical(ann_df["dataset"], categories=DATASET_ORDER, ordered=True)
+    ann_df["dataset"] = pd.Categorical(ann_df["dataset"], categories=dataset_order, ordered=True)
     ann_df["variable"] = pd.Categorical(
         ann_df["variable"],
         categories=[r"AOD$_{550}$", r"Ångström $\alpha$"],
         ordered=True,
     )
     ann_df["metric"] = pd.Categorical(ann_df["metric"], categories=[metric_fge], ordered=True)
-    return long_df, ann_df
+    return long_df, ann_df, dataset_order
 
 
 def _theme_common():
@@ -487,8 +552,11 @@ def plot_xai_summary_figure() -> plt.Figure:
     return fig
 
 
-def plot_oe_train_test_violin(df_long: pd.DataFrame, ann_df: pd.DataFrame):
-    cmap = dict(zip(DATASET_ORDER, DATASET_COLORS))
+def plot_oe_train_test_violin(
+    df_long: pd.DataFrame, ann_df: pd.DataFrame, dataset_order: list[str]
+):
+    colors = _DATASET_PALETTE[: len(dataset_order)]
+    cmap = dict(zip(dataset_order, colors))
     return (
         ggplot(df_long, aes(x="dataset", y="value", fill="dataset", color="dataset"))
         + geom_hline(yintercept=0, linetype="dashed", size=0.35, color="#4d4d4d")
@@ -544,7 +612,8 @@ def plot_irradiance_scatter():
     )
 
 
-def _figure_to_array(fig: plt.Figure) -> np.ndarray:
+def _figure_to_array(fig: plt.Figure, dpi: float) -> np.ndarray:
+    fig.set_dpi(dpi)
     fig.canvas.draw()
     # Robust extraction across backends/layout engines.
     rgba = np.asarray(fig.canvas.buffer_rgba())
@@ -553,19 +622,28 @@ def _figure_to_array(fig: plt.Figure) -> np.ndarray:
     raise RuntimeError("Unexpected canvas buffer shape while rasterizing figure.")
 
 
-def build_composite_figure(df_long: pd.DataFrame, ann_df: pd.DataFrame) -> plt.Figure:
-    violin_fig = (plot_oe_train_test_violin(df_long, ann_df) + theme(figure_size=(5.6, 3.6))).draw()
+def build_composite_figure(
+    df_long: pd.DataFrame,
+    ann_df: pd.DataFrame,
+    dataset_order: list[str],
+    *,
+    raster_dpi: float = EXPORT_DPI,
+) -> plt.Figure:
+    vw = 5.6 + 0.55 * max(0, len(dataset_order) - 2)
+    violin_fig = (
+        plot_oe_train_test_violin(df_long, ann_df, dataset_order) + theme(figure_size=(vw, 3.6))
+    ).draw()
     shap_fig = plot_xai_summary_figure()
     scatter_fig = (plot_irradiance_scatter() + theme(figure_size=(10.5, 3.2))).draw()
 
-    violin_img = _figure_to_array(violin_fig)
-    shap_img = _figure_to_array(shap_fig)
-    scatter_img = _figure_to_array(scatter_fig)
+    violin_img = _figure_to_array(violin_fig, raster_dpi)
+    shap_img = _figure_to_array(shap_fig, raster_dpi)
+    scatter_img = _figure_to_array(scatter_fig, raster_dpi)
     plt.close(violin_fig)
     plt.close(shap_fig)
     plt.close(scatter_fig)
 
-    out = plt.figure(figsize=(FIG_W_MM / 25.4, (FIG_H_MM * 1.9) / 25.4))
+    out = plt.figure(figsize=(FIG_W_MM / 25.4, (FIG_H_MM * 1.9) / 25.4), dpi=raster_dpi)
     gs = GridSpec(2, 2, figure=out, height_ratios=[1.05, 1.0], width_ratios=[1.0, 2.0], hspace=0.08, wspace=0.05)
     ax_tl = out.add_subplot(gs[0, 0])
     ax_tr = out.add_subplot(gs[0, 1])
@@ -576,23 +654,45 @@ def build_composite_figure(df_long: pd.DataFrame, ann_df: pd.DataFrame) -> plt.F
     return out
 
 
-def save_composite_pdf(fig: plt.Figure, out_path: Path) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with PdfPages(str(out_path)) as pdf:
-        fig.patch.set_facecolor("white")
-        pdf.savefig(fig, bbox_inches="tight", pad_inches=0.02, facecolor="white", edgecolor="none")
+def save_composite_figure(fig: plt.Figure, out_pdf: Path, dpi: float = EXPORT_DPI) -> None:
+    """Write PDF at ``dpi``; optionally a sibling PNG (``EXPORT_PNG``)."""
+    out_pdf.parent.mkdir(parents=True, exist_ok=True)
+    fig.patch.set_facecolor("white")
+    fig.set_dpi(dpi)
+    with PdfPages(str(out_pdf)) as pdf:
+        pdf.savefig(
+            fig,
+            dpi=dpi,
+            bbox_inches="tight",
+            pad_inches=0.02,
+            facecolor="white",
+            edgecolor="none",
+        )
+    if _EXPORT_PNG:
+        png_path = out_pdf.with_suffix(".png")
+        fig.savefig(
+            png_path,
+            format="png",
+            dpi=dpi,
+            bbox_inches="tight",
+            pad_inches=0.02,
+            facecolor="white",
+            edgecolor="none",
+        )
     plt.close(fig)
 
 
 def main() -> None:
-    df_long, ann_df = _load_long_error_table()
-    fig = build_composite_figure(df_long, ann_df)
-    save_composite_pdf(fig, OUTPUT_FIG)
+    df_long, ann_df, dataset_order = _load_long_error_table()
+    fig = build_composite_figure(df_long, ann_df, dataset_order, raster_dpi=EXPORT_DPI)
+    save_composite_figure(fig, OUTPUT_FIG, dpi=EXPORT_DPI)
 
     # Export tidy table too (useful for custom R plotting)
     out_txt = OUTPUT_FIG.with_suffix(".txt")
     df_long.to_csv(out_txt, sep="\t", index=False, float_format="%.8g")
-    print(f"Wrote: {OUTPUT_FIG}")
+    print(f"Wrote: {OUTPUT_FIG} (dpi={EXPORT_DPI:g})")
+    if _EXPORT_PNG:
+        print(f"Wrote: {OUTPUT_FIG.with_suffix('.png')} (dpi={EXPORT_DPI:g})")
     print(f"Wrote: {out_txt}")
 
 
