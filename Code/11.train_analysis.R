@@ -68,7 +68,7 @@ ret.ls.path  <- file.path(dir0, "Data", paste0(stn, "_", yr, "_train_ls", k.suff
 ret.oe.path  <- file.path(dir0, "Data", paste0(stn, "_", yr, "_train_oe", k.suffix, ".txt"))
 
 fig.name <- ifelse(use.tabpfn, "train_results_tabpfn.pdf", "train_results.pdf")
-fig.path <- Sys.getenv("OUTPUT_FIG", file.path(dir0, "tex", fig.name))
+fig.path <- Sys.getenv("OUTPUT_FIG", file.path(dir0, "Revision 1", fig.name))
 
 fig.w.mm <- 160; fig.h.density.mm <- 45; fig.h.scatter.mm <- 62
 #################################################################################
@@ -81,7 +81,7 @@ aod550 <- function(beta, alpha) beta * (lam550 / lambda.ref)^(-alpha)
 metrics.vs.ref <- function(obs, mod) {
   ok <- is.finite(obs) & is.finite(mod)
   obs <- obs[ok]; mod <- mod[ok]; n <- length(obs)
-  if (n == 0) return(data.frame(n=0, mbe=NA, rmse=NA, fb=NA, fge=NA))
+  if (n == 0) return(data.frame(n=0, mbe=NA, rmse=NA, fb=NA, fge=NA, r=NA))
   mo <- mean(obs); mm <- mean(mod); denom <- mo + mm
   den.row <- mod + obs
   fge.row <- rep(NA_real_, n)
@@ -92,7 +92,8 @@ metrics.vs.ref <- function(obs, mod) {
     mbe  = mean(mod - obs),
     rmse = sqrt(mean((mod - obs)^2)),
     fb   = ifelse(denom > 0, 2 * (mo - mm) / denom, NA),
-    fge  = ifelse(any(is.finite(fge.row)), mean(fge.row, na.rm = TRUE), NA)
+    fge  = ifelse(any(is.finite(fge.row)), mean(fge.row, na.rm = TRUE), NA),
+    r    = if (n >= 2) cor(obs, mod) else NA_real_
   )
 }
 
@@ -101,7 +102,8 @@ metrics.text <- function(m) {
          "MBE = ", formatC(m$mbe, format="f", digits=4), "\n",
          "RMSE = ", formatC(m$rmse, format="f", digits=4), "\n",
          "FB = ", formatC(m$fb, format="f", digits=4), "\n",
-         "FGE = ", formatC(m$fge, format="f", digits=4))
+         "FGE = ", formatC(m$fge, format="f", digits=4), "\n",
+         "R = ", formatC(m$r, format="f", digits=4))
 }
 
 #################################################################################
@@ -170,8 +172,8 @@ for (info in list(
   c("Alpha MERRA", met.a.m), c(paste("Alpha", ls.tag), met.a.ls), c(paste("Alpha", oe.tag), met.a.oe)
 )) {
   m <- info[-1]
-  cat(sprintf("%s vs AERONET: n=%d, MBE=%.6f, RMSE=%.6f, FB=%.6f, FGE=%.6f\n",
-              info[1], as.integer(m$n), m$mbe, m$rmse, m$fb, m$fge))
+  cat(sprintf("%s vs AERONET: n=%d, MBE=%.6f, RMSE=%.6f, FB=%.6f, FGE=%.6f, R=%.6f\n",
+              info[1], as.integer(m$n), m$mbe, m$rmse, m$fb, m$fge, m$r))
 }
 
 #################################################################################

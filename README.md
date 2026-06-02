@@ -42,6 +42,7 @@ These scripts assume the same `STATION`, `YEAR`, `LHS_N` / `_0.5k` naming as abo
 | `11.train_analysis.R` | R counterpart for train figures (match styling with step 11 Python if desired). |
 | `12.test_analysis.py` | Composite **test** PDF: FGE violins, SHAP summaries, irradiance scatter (matplotlib + plotnine). Defaults: `pred_oe`, `train_oe`, SHAP files, `test_irradiance`. |
 | `12.test_analysis.R` | R **patchwork** composite for the same story (e.g. `scattermore` on irradiance panel). Uses **`TEST_OE`** like the Python script when `test_oe.txt` exists. |
+| `13.BSRN.R` | Global **BSRN** station map (Wong status colours); default **`Revision 1/BSRN_stations_map.pdf`**. |
 
 **Note:** Older workflows used a bundled `6.evaluation.py` that wrote `test_combined*.txt` and a separate `7.retrieval_result.py`. Those files are **not** in this repository anymore. Use **`pred_ls` / `pred_oe`** from step 5, **`7.irradiance.py`** for flux validation, and **`12.test_analysis`** for the combined test figure.
 
@@ -99,6 +100,8 @@ tabpfn-extensions[interpretability]   # 6.xai.py (SHAP)
 
 For **`12.test_analysis.R`**: R packages `dplyr`, `tidyr`, `ggplot2`, `patchwork`, **`scattermore`**.
 
+For **`13.BSRN.R`**: R packages `dplyr`, `ggplot2`, **`maps`**, **`ggrepel`**.
+
 ## Setup
 
 1. Clone the repository:
@@ -152,6 +155,7 @@ MODE=oe $PY Code/5.tabpfn.py
 # USE_TABPFN=1 $PY Code/11.train_analysis.py
 # $PY Code/12.test_analysis.py
 # Rscript Code/12.test_analysis.R
+# Rscript Code/13.BSRN.R
 ```
 
 ### Environment variables (selected)

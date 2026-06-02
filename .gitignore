@@ -8,8 +8,9 @@ env/
 .cursor/
 .gemini/
 
-# Exclude tex
+# Exclude tex and local revision materials
 tex/
+Revision 1/
 
 # Data: ignore bulk outputs; version station holdout pools only
 Data/*

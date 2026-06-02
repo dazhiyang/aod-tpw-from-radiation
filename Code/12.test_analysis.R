@@ -40,7 +40,7 @@ train.oe.path <- Sys.getenv("TRAIN_OE", file.path(dir0, "Data", paste0(stn, "_",
 irr.path <- Sys.getenv("IRRADIANCE_IN", file.path(dir0, "Data", paste0(stn, "_", yr, "_test_irradiance", k.suffix, ".txt")))
 shap.a.path <- Sys.getenv("SHAP_ALPHA", file.path(dir0, "Data", paste0(stn, "_", yr, "_shap_oe_alpha", k.suffix, ".txt")))
 shap.b.path <- Sys.getenv("SHAP_BETA", file.path(dir0, "Data", paste0(stn, "_", yr, "_shap_oe_beta", k.suffix, ".txt")))
-out.fig <- Sys.getenv("OUTPUT_FIG", file.path(dir0, "tex", "test_results.pdf"))
+out.fig <- Sys.getenv("OUTPUT_FIG", file.path(dir0, "Revision 1", "test_results.pdf"))
 
 plot.size <- 9
 line.size <- 0.3
@@ -98,7 +98,7 @@ fge.vec <- function(pred, ref) {
 metrics <- function(pred, ref) {
   ok <- is.finite(pred) & is.finite(ref)
   p <- pred[ok]; r <- ref[ok]
-  if (length(p) == 0) return(data.frame(n=0, mbe=NA, rmse=NA, fb=NA, fge=NA))
+  if (length(p) == 0) return(data.frame(n=0, mbe=NA, rmse=NA, fb=NA, fge=NA, r=NA))
   den.fb <- mean(p) + mean(r)
   fge <- fge.vec(p, r)
   data.frame(
@@ -106,7 +106,8 @@ metrics <- function(pred, ref) {
     mbe = mean(p - r),
     rmse = sqrt(mean((p - r)^2)),
     fb = ifelse(den.fb > 0, 2 * (mean(r) - mean(p)) / den.fb, NA_real_),
-    fge = mean(fge, na.rm = TRUE)
+    fge = mean(fge, na.rm = TRUE),
+    r = if (length(p) >= 2) cor(p, r) else NA_real_
   )
 }
 
@@ -170,7 +171,7 @@ if (has.test.oe) {
   )
 }
 ann <- dplyr::bind_rows(ann.parts)
-ann$label <- sprintf("MBE=%.4f\nRMSE=%.4f\nFB=%.4f\nFGE=%.4f", ann$mbe, ann$rmse, ann$fb, ann$fge)
+ann$label <- sprintf("MBE=%.4f\nRMSE=%.4f\nFB=%.4f\nFGE=%.4f\nR=%.4f", ann$mbe, ann$rmse, ann$fb, ann$fge, ann$r)
 ann$y <- as.numeric(Sys.getenv("ANNOT_Y", "1.5"))
 ann$dataset <- factor(ann$dataset, levels = ds.levels)
 ann$variable <- factor(ann$variable, levels = c("AOD[550]", "Angstrom~alpha"))
