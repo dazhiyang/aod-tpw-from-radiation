@@ -37,10 +37,16 @@ lhs.n <- as.integer(Sys.getenv("LHS_N", "500"))
 k.suffix <- ifelse(lhs.n == 500, "_0.5k", ifelse(lhs.n >= 1000, paste0("_", lhs.n/1000, "k"), paste0("_", lhs.n)))
 use.tabpfn <- tolower(Sys.getenv("USE_TABPFN", "")) %in% c("1", "true", "yes")
 
-plot.size <- 9; line.size <- 0.3; point.size <- 1.5
-lam550 <- 0.55; lambda.ref <- 1.0
-aod.x.max <- 0.6; density.n <- 512
-ribbon.alpha <- 0.18; density.lw <- 0.12; density.aeronet.lw <- 0.55
+plot.size <- 8 
+line.size <- 0.3 
+point.size <- 1.5
+lam550 <- 0.55 
+lambda.ref <- 1.0
+aod.x.max <- 0.6
+density.n <- 512
+ribbon.alpha <- 0.18
+density.lw <- 0.12
+density.aeronet.lw <- 0.55
 
 # Wong colorblind-friendly palette
 col.merra   <- "#E69F00"  # orange

@@ -42,7 +42,7 @@ shap.a.path <- Sys.getenv("SHAP_ALPHA", file.path(dir0, "Data", paste0(stn, "_",
 shap.b.path <- Sys.getenv("SHAP_BETA", file.path(dir0, "Data", paste0(stn, "_", yr, "_shap_oe_beta", k.suffix, ".txt")))
 out.fig <- Sys.getenv("OUTPUT_FIG", file.path(dir0, "Revision 1", "test_results.pdf"))
 
-plot.size <- 9
+plot.size <- 8
 line.size <- 0.3
 point.size <- 0.9
 fig.w.mm <- as.numeric(Sys.getenv("FIG_W_MM", "160"))
